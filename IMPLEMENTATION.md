@@ -45,7 +45,7 @@ The translation layer will handle mapping between WebDAV operations and gRPC cal
 - `PROPPATCH` → `SetMetadata` and `DeleteMetadata`
 - `COPY` → `Copy`
 - `MOVE` → `Move` or `Rename`
-- `LOCK`/`UNLOCK` → Custom locking mechanism (to be implemented)
+- `LOCK`/`UNLOCK` → Since FileEngine is pervasively versioned and immutable, traditional file locking concerns do not apply. These operations will be handled at the application level if needed for client-side locking semantics, but will not enforce any actual file locks on the backend.
 
 #### Path to UUID Mapping:
 - Implement a path resolution service that translates file paths to UUIDs
@@ -65,11 +65,29 @@ The service will authenticate users against the LDAP directory with the followin
 - `contributors` group → READ/WRITE permissions
 - `administrators` group → FULL permissions
 
-### 4.3 Authentication Flow
+### 4.3 Special Internal User
+- The special internal user `root` has full access to the gRPC back-end regardless of tenant restrictions
+- This user bypasses normal permission checks for administrative operations
+- The `root` user is NOT allowed to access the system via WebDAV
+- The `root` user is only used internally for administrative tasks such as setting initial ACLs when a new tenant is created
+
+### 4.4 Multi-Tenancy
+The service implements multi-tenancy based on sub-domains:
+- The tenant name is derived from the sub-domain, excluding `www`
+- If the sub-domain includes a hyphen (`-`), only the part before the hyphen is used for the tenant name
+- Examples:
+  - `tenant1.example.com` → tenant name: `tenant1`
+  - `tenant2.example.com` → tenant name: `tenant2`
+  - `tenant-dev.example.com` → tenant name: `tenant` (part before hyphen)
+  - `www.example.com` → tenant name: (default/main tenant, as www is excluded)
+
+### 4.5 Authentication Flow
 1. Extract credentials from WebDAV request (Basic Auth or Digest Auth)
-2. Authenticate against LDAP directory using connection pool
-3. Retrieve user's roles and tenant membership
-4. Create AuthenticationContext for gRPC calls with user, roles, and tenant information
+2. Determine tenant from sub-domain following multi-tenancy rules
+3. Check if user is the special internal `root` user
+4. If not root, authenticate against LDAP directory using connection pool
+5. Retrieve user's roles and tenant membership
+6. Create AuthenticationContext for gRPC calls with user, roles, and tenant information
 
 ## 5. Implementation Phases
 
@@ -89,7 +107,7 @@ The service will authenticate users against the LDAP directory with the followin
 - Implement PROPFIND for property queries
 - Implement PROPPATCH for metadata updates
 - Implement COPY and MOVE operations
-- Add LOCK/UNLOCK support
+- Implement LOCK/UNLOCK operations for client-side locking semantics (no actual backend locking required due to FileEngine's versioned and immutable nature)
 
 ### Phase 4: Optimization and Testing
 - Add caching mechanisms
@@ -155,7 +173,20 @@ When a custom configuration file is specified, it will take precedence over envi
 - `LOG_LEVEL` - Logging level (default: debug); supports standard levels: trace, debug, info, warn, error, fatal; with very detailed logging for the `debug` level including all HTTP requests, authentication attempts, gRPC calls, and database operations
 - `LOG_FILE` - Path to the log file where logs will be written (default: stdout)
 
-## 9. Persistent Data Storage
+## 9. Tenant Initialization
+
+When a new tenant is created, the system must perform the following initialization steps:
+
+- Create the tenant's root directory in the FileEngine filesystem
+- Use the special internal `root` user to setup initial ACLs on the filesystem root for the tenant (when the default ACLs have not been created yet)
+- Assign appropriate permissions to the tenant's administrator group
+- Register the tenant in the persistent storage for tracking
+
+This initialization process ensures that each tenant has the proper access controls and permissions from the start. The `root` user is used exclusively for this internal administrative task and is not accessible via WebDAV.
+
+Additionally, the system includes logic to detect authorization failures on the filesystem root and check if the ACLs have yet to be set. If ACLs are missing, the system will automatically trigger the initial permissions setup using the `root` user to ensure proper access controls are established.
+
+## 10. Persistent Data Storage
 
 The WebDAV bridge will utilize a Postgres database for storing persistent data that needs to survive service restarts. The database will store:
 
@@ -163,19 +194,19 @@ The WebDAV bridge will utilize a Postgres database for storing persistent data t
 - User session information (if required)
 - Cached LDAP user information to reduce directory queries
 - WebDAV-specific metadata that doesn't fit the FileEngine model
-- Lock information for WebDAV LOCK/UNLOCK operations
+- Lock tokens for WebDAV LOCK/UNLOCK operations (for client-side locking semantics, not actual file locks since FileEngine is pervasively versioned and immutable)
 - Operation logs for audit purposes
 
 Connection to the database will be managed through a connection pool to ensure efficient resource usage.
 
-## 10. LDAP Authentication Integration Plan
+## 11. LDAP Authentication Integration Plan
 
-### 10.1 LDAP Connection Management
+### 11.1 LDAP Connection Management
 - Implement an LDAP connection pool to handle multiple concurrent authentication requests
 - Create a configuration system for LDAP server details (host, port, bind DN, password)
 - Support both direct binding and search+bind authentication methods
 
-### 10.2 User Authentication Flow
+### 11.2 User Authentication Flow
 - Extract credentials from WebDAV request (supporting both Basic and Digest authentication)
 - For Basic Auth: extract username and password from the authorization header
 - For Digest Auth: validate the digest response against the stored password hash
@@ -183,19 +214,20 @@ Connection to the database will be managed through a connection pool to ensure e
 - Attempt to bind with user credentials
 - On successful bind, retrieve user's group memberships and tenant association
 
-### 10.3 User Information Retrieval
+### 11.3 User Information Retrieval
 - Query LDAP for user's distinguished name (DN) using the username
 - Search for user's group memberships to determine roles (users, contributors, administrators)
 - Identify user's tenant by checking their organizational unit membership
+- Validate tenant name against sub-domain following multi-tenancy rules
 
-### 10.4 Role and Permission Mapping
+### 11.4 Role and Permission Mapping
 - Map LDAP group memberships to FileEngine permissions:
   - Members of `users` group → READ permissions
   - Members of `contributors` group → READ/WRITE permissions
   - Members of `administrators` group → FULL permissions
 - Construct the AuthenticationContext with user ID, roles, and tenant for gRPC calls
 
-### 10.5 Security Considerations
+### 11.5 Security Considerations
 - Use LDAPS (LDAP over SSL/TLS) for secure communication
 - Support both Basic and Digest authentication methods for WebDAV access
 - When using Basic Auth, ensure connections are encrypted with HTTPS
@@ -203,14 +235,14 @@ Connection to the database will be managed through a connection pool to ensure e
 - Add rate limiting to prevent brute force attacks
 - Cache authentication results temporarily to reduce LDAP load
 
-## 11. Error Handling and Logging
+## 12. Error Handling and Logging
 
 - Implement comprehensive error handling for all WebDAV operations
 - Log all authentication attempts and operations for audit purposes
 - Return appropriate HTTP status codes for different error conditions
 - Implement retry mechanisms for transient failures
 
-## 12. Testing Strategy
+## 13. Testing Strategy
 
 - Unit tests for individual components (authentication, path resolution, gRPC client)
 - Integration tests for end-to-end WebDAV operations

@@ -13,11 +13,15 @@ LDAPAuthenticator::LDAPAuthenticator(
     const std::string& ldap_endpoint,
     const std::string& ldap_domain,
     const std::string& bind_dn,
-    const std::string& bind_password)
+    const std::string& bind_password,
+    const std::string& tenant_base,
+    const std::string& user_base)
     : ldap_endpoint_(ldap_endpoint),
       ldap_domain_(ldap_domain),
       bind_dn_(bind_dn),
-      bind_password_(bind_password) {
+      bind_password_(bind_password),
+      tenant_base_(tenant_base.empty() ? ldap_domain : tenant_base),
+      user_base_(user_base.empty() ? ldap_domain : user_base) {
 }
 
 LDAPAuthenticator::~LDAPAuthenticator() {
@@ -193,20 +197,20 @@ UserInfo LDAPAuthenticator::getUserInfo(const std::string& username) {
 LDAP* LDAPAuthenticator::connectToLDAP() {
     LDAP* ld = nullptr;
     int version = LDAP_VERSION3;
-    
+
     int rc = ldap_initialize(&ld, ldap_endpoint_.c_str());
     if (rc != LDAP_SUCCESS) {
         std::cerr << "Failed to initialize LDAP connection: " << ldap_err2string(rc) << std::endl;
         return nullptr;
     }
-    
+
     ldap_set_option(ld, LDAP_OPT_PROTOCOL_VERSION, &version);
-    
+
     // Bind with service account
     struct berval cred;
     cred.bv_val = const_cast<char*>(bind_password_.c_str());
     cred.bv_len = bind_password_.length();
-    
+
     rc = ldap_sasl_bind_s(
         ld,
         bind_dn_.c_str(),
@@ -216,23 +220,23 @@ LDAP* LDAPAuthenticator::connectToLDAP() {
         nullptr,
         nullptr
     );
-    
+
     if (rc != LDAP_SUCCESS) {
         std::cerr << "Failed to bind to LDAP server: " << ldap_err2string(rc) << std::endl;
         ldap_unbind_ext_s(ld, nullptr, nullptr);
         return nullptr;
     }
-    
+
     return ld;
 }
 
 UserInfo LDAPAuthenticator::searchUser(LDAP* ld, const std::string& username) {
     std::string search_filter = "(uid=" + username + ")";
     LDAPMessage* result = nullptr;
-    
+
     int ldap_result = ldap_search_s(
         ld,
-        ldap_domain_.c_str(),
+        user_base_.c_str(),  // Use the configured user base
         LDAP_SCOPE_SUBTREE,
         search_filter.c_str(),
         nullptr,
@@ -314,7 +318,7 @@ std::vector<std::string> LDAPAuthenticator::extractRolesFromGroups(LDAP* ld, con
 
     int ldap_result = ldap_search_s(
         ld,
-        ldap_domain_.c_str(),
+        tenant_base_.c_str(),  // Use the configured tenant base
         LDAP_SCOPE_SUBTREE,
         search_filter.c_str(),
         nullptr,

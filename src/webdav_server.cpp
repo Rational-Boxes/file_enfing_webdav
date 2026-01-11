@@ -447,7 +447,9 @@ WebDAVServer::WebDAVServer(const std::string& host, int port)
           webdav::getEnvOrDefault("FILEENGINE_LDAP_ENDPOINT", "ldap://localhost:1389"),
           webdav::getEnvOrDefault("FILEENGINE_LDAP_DOMAIN", "dc=rationalboxes,dc=com"),
           webdav::getEnvOrDefault("FILEENGINE_LDAP_BIND_DN", "cn=admin,dc=rationalboxes,dc=com"),
-          webdav::getEnvOrDefault("FILEENGINE_LDAP_BIND_PASSWORD", "admin")
+          webdav::getEnvOrDefault("FILEENGINE_LDAP_BIND_PASSWORD", "admin"),
+          webdav::getEnvOrDefault("FILEENGINE_LDAP_TENANT_BASE", ""),
+          webdav::getEnvOrDefault("FILEENGINE_LDAP_USER_BASE", "")
       )),
       socket_(std::make_unique<Poco::Net::ServerSocket>(port)),
       server_params_(new Poco::Net::HTTPServerParams),

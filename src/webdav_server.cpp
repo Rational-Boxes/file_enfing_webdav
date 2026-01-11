@@ -893,14 +893,7 @@ bool WebDAVRequestHandler::authenticateUser(Poco::Net::HTTPServerRequest& reques
 WebDAVServer::WebDAVServer(const std::string& host, int port)
     : host_(host), port_(port),
       grpc_client_(std::make_shared<GRPCClientWrapper>(webdav::getEnvOrDefault("FILEENGINE_GRPC_HOST", "localhost") + ":" + webdav::getEnvOrDefault("FILEENGINE_GRPC_PORT", "50051"))),
-      path_resolver_(std::make_shared<PathResolver>(
-          grpc_client_,
-          "host=" + webdav::getEnvOrDefault("POSTGRES_HOST", "localhost") +
-          " port=" + webdav::getEnvOrDefault("POSTGRES_PORT", "5432") +
-          " dbname=" + webdav::getEnvOrDefault("POSTGRES_DB", "webdav_bridge") +
-          " user=" + webdav::getEnvOrDefault("POSTGRES_USER", "postgres") +
-          " password=" + webdav::getEnvOrDefault("POSTGRES_PASSWORD", "")
-      )),
+      path_resolver_(std::make_shared<PathResolver>(grpc_client_)),
       ldap_auth_(std::make_shared<LDAPAuthenticator>(
           webdav::getEnvOrDefault("FILEENGINE_LDAP_ENDPOINT", "ldap://localhost:1389"),
           webdav::getEnvOrDefault("FILEENGINE_LDAP_DOMAIN", "dc=rationalboxes,dc=com"),

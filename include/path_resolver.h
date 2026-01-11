@@ -5,8 +5,6 @@
 #include <unordered_map>
 #include <memory>
 #include <mutex>
-#include <pqxx/pqxx> // PostgreSQL C++ client library
-#include <queue>
 
 #include "grpc_client_wrapper.h"
 
@@ -36,6 +34,14 @@ public:
 
 private:
     std::shared_ptr<GRPCClientWrapper> grpc_client_;
+
+    // In-memory storage for path-to-UUID mappings
+    std::unordered_map<std::string, std::string> path_to_uuid_map_; // path -> uuid
+    std::unordered_map<std::string, std::string> uuid_to_path_map_; // uuid -> path
+    mutable std::mutex mutex_;
+
+    // Helper function to get tenant-specific cache key
+    std::string getCacheKey(const std::string& path, const std::string& tenant);
 };
 
 } // namespace webdav

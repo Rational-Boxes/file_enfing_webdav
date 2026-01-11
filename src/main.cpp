@@ -1,5 +1,8 @@
 #include <iostream>
 #include <string>
+#include <thread>
+#include <chrono>
+#include <signal.h>
 #include <Poco/Util/Application.h>
 #include <Poco/Util/Option.h>
 #include <Poco/Util/OptionSet.h>
@@ -10,6 +13,13 @@
 
 #include "webdav_server.h"
 #include "utils.h"
+
+// Global flag to control server shutdown
+volatile sig_atomic_t server_running = 1;
+
+void signal_handler(int signal) {
+    server_running = 0;
+}
 
 using Option = Poco::Util::Option;
 using OptionSet = Poco::Util::OptionSet;
@@ -79,12 +89,14 @@ protected:
             std::unique_ptr<webdav::WebDAVServer> server = std::make_unique<webdav::WebDAVServer>(host, port);
             server->start();
 
-            // For now, just create and start the server without waiting
-            // In a real implementation, this would be handled by proper signal handling
-            // webdav::WebDAVServer server(host, port);
-            // server.start();
-            // waitForTerminationRequest(); // This is only available in ServerApplication
-            std::cout << "WebDAV server would start on " << host << ":" << port << std::endl;
+            // Set up signal handling for graceful shutdown
+            signal(SIGINT, signal_handler);
+            signal(SIGTERM, signal_handler);
+
+            // Keep the server running until a signal is received
+            while (server_running) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100)); // Sleep briefly to allow signal handling
+            }
 
             server->stop();
             server.reset(); // Explicitly reset to ensure proper cleanup
@@ -104,7 +116,7 @@ int main(int argc, char** argv) {
     webdav::WebDAVApplication app;
     try {
         app.init(argc, argv);
-        return app.Application::run();
+        return app.run();
     } catch (Poco::Exception& exc) {
         std::cerr << exc.displayText() << std::endl;
         return Poco::Util::Application::EXIT_SOFTWARE;

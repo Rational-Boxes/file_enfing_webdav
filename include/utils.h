@@ -37,6 +37,15 @@ std::string getEnvOrDefault(const std::string& env_var, const std::string& defau
 // Utility functions for error handling
 std::string getErrorMessage(int error_code);
 
+// Logging utilities
+void logMessage(const std::string& level, const std::string& message);
+bool shouldLogToConsole();
+bool isLogLevelAtLeast(const std::string& level);
+void debugLog(const std::string& message);
+void infoLog(const std::string& message);
+void warnLog(const std::string& message);
+void errorLog(const std::string& message);
+
 } // namespace webdav
 
 #endif // UTILS_H

@@ -6,6 +6,7 @@
 #include <string>
 
 #include "fileservice.grpc.pb.h"
+#include "utils.h"  // For logging functions
 
 namespace webdav {
 

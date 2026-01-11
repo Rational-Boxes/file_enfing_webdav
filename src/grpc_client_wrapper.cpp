@@ -13,38 +13,57 @@ GRPCClientWrapper::~GRPCClientWrapper() = default;
 
 // Directory operations
 fileengine_rpc::MakeDirectoryResponse GRPCClientWrapper::makeDirectory(const fileengine_rpc::MakeDirectoryRequest& request) {
+    webdav::debugLog("gRPC MakeDirectory called with parent_uid: " + request.parent_uid() +
+                     ", name: " + request.name() +
+                     ", tenant: " + request.auth().tenant() +
+                     ", user: " + request.auth().user());
+
     fileengine_rpc::MakeDirectoryResponse response;
     grpc::ClientContext context;
-    
+
     grpc::Status status = stub_->MakeDirectory(&context, request, &response);
     if (!status.ok()) {
-        std::cerr << "MakeDirectory failed: " << status.error_message() << std::endl;
+        webdav::errorLog("MakeDirectory failed: " + std::string(status.error_message()));
+    } else {
+        webdav::debugLog("MakeDirectory succeeded, returned uid: " + response.uid());
     }
-    
+
     return response;
 }
 
 fileengine_rpc::RemoveDirectoryResponse GRPCClientWrapper::removeDirectory(const fileengine_rpc::RemoveDirectoryRequest& request) {
+    webdav::debugLog("gRPC RemoveDirectory called with uid: " + request.uid() +
+                     ", tenant: " + request.auth().tenant() +
+                     ", user: " + request.auth().user());
+
     fileengine_rpc::RemoveDirectoryResponse response;
     grpc::ClientContext context;
-    
+
     grpc::Status status = stub_->RemoveDirectory(&context, request, &response);
     if (!status.ok()) {
-        std::cerr << "RemoveDirectory failed: " << status.error_message() << std::endl;
+        webdav::errorLog("RemoveDirectory failed: " + std::string(status.error_message()));
+    } else {
+        webdav::debugLog("RemoveDirectory succeeded for uid: " + request.uid());
     }
-    
+
     return response;
 }
 
 fileengine_rpc::ListDirectoryResponse GRPCClientWrapper::listDirectory(const fileengine_rpc::ListDirectoryRequest& request) {
+    webdav::debugLog("gRPC ListDirectory called with uid: " + request.uid() +
+                     ", tenant: " + request.auth().tenant() +
+                     ", user: " + request.auth().user());
+
     fileengine_rpc::ListDirectoryResponse response;
     grpc::ClientContext context;
-    
+
     grpc::Status status = stub_->ListDirectory(&context, request, &response);
     if (!status.ok()) {
-        std::cerr << "ListDirectory failed: " << status.error_message() << std::endl;
+        webdav::errorLog("ListDirectory failed: " + std::string(status.error_message()));
+    } else {
+        webdav::debugLog("ListDirectory succeeded, returned " + std::to_string(response.entries_size()) + " entries");
     }
-    
+
     return response;
 }
 
@@ -98,26 +117,40 @@ fileengine_rpc::UndeleteFileResponse GRPCClientWrapper::undeleteFile(const filee
 }
 
 fileengine_rpc::PutFileResponse GRPCClientWrapper::putFile(const fileengine_rpc::PutFileRequest& request) {
+    webdav::debugLog("gRPC PutFile called with uid: " + request.uid() +
+                     ", data size: " + std::to_string(request.data().size()) + " bytes" +
+                     ", tenant: " + request.auth().tenant() +
+                     ", user: " + request.auth().user());
+
     fileengine_rpc::PutFileResponse response;
     grpc::ClientContext context;
-    
+
     grpc::Status status = stub_->PutFile(&context, request, &response);
     if (!status.ok()) {
-        std::cerr << "PutFile failed: " << status.error_message() << std::endl;
+        webdav::errorLog("PutFile failed: " + std::string(status.error_message()));
+    } else {
+        webdav::debugLog("PutFile succeeded for uid: " + request.uid());
     }
-    
+
     return response;
 }
 
 fileengine_rpc::GetFileResponse GRPCClientWrapper::getFile(const fileengine_rpc::GetFileRequest& request) {
+    webdav::debugLog("gRPC GetFile called with uid: " + request.uid() +
+                     ", version: " + request.version_timestamp() +
+                     ", tenant: " + request.auth().tenant() +
+                     ", user: " + request.auth().user());
+
     fileengine_rpc::GetFileResponse response;
     grpc::ClientContext context;
-    
+
     grpc::Status status = stub_->GetFile(&context, request, &response);
     if (!status.ok()) {
-        std::cerr << "GetFile failed: " << status.error_message() << std::endl;
+        webdav::errorLog("GetFile failed: " + std::string(status.error_message()));
+    } else {
+        webdav::debugLog("GetFile succeeded, returned data of size: " + std::to_string(response.data().size()) + " bytes");
     }
-    
+
     return response;
 }
 

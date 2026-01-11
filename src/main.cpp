@@ -124,6 +124,11 @@ protected:
             std::string host = config().getString("webdav.host", webdav::getEnvOrDefault("WEBDAV_HOST", "0.0.0.0"));
             int port = config().getInt("webdav.port", std::stoi(webdav::getEnvOrDefault("WEBDAV_PORT", "8080")));
 
+            // Log startup message
+            if (webdav::shouldLogToConsole()) {
+                webdav::logMessage("INFO", "Starting WebDAV server on " + host + ":" + std::to_string(port));
+            }
+
             // Create and start the WebDAV server
             std::unique_ptr<webdav::WebDAVServer> server = std::make_unique<webdav::WebDAVServer>(host, port);
             server->start();
@@ -135,6 +140,11 @@ protected:
             // Keep the server running until a signal is received
             while (server_running) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(100)); // Sleep briefly to allow signal handling
+            }
+
+            // Log shutdown message
+            if (webdav::shouldLogToConsole()) {
+                webdav::logMessage("INFO", "Shutting down WebDAV server");
             }
 
             server->stop();

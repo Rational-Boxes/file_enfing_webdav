@@ -3,6 +3,8 @@
 #include <cctype>
 #include <iomanip>
 #include <sstream>
+#include <Poco/DateTimeFormatter.h>
+#include <Poco/Timestamp.h>
 
 namespace webdav {
 
@@ -163,6 +165,78 @@ std::string getErrorMessage(int error_code) {
         case 412: return "Precondition Failed";
         case 500: return "Internal Server Error";
         default: return "Unknown Error";
+    }
+}
+
+void logMessage(const std::string& level, const std::string& message) {
+    std::string timestamp = Poco::DateTimeFormatter::format(
+        Poco::Timestamp(),
+        "%Y-%m-%d %H:%M:%S.%i"
+    );
+
+    std::string log_line = "[" + timestamp + "] [" + level + "] " + message;
+
+    // Always write to standard streams for now
+    if (level == "ERROR" || level == "FATAL") {
+        std::cerr << log_line << std::endl;
+    } else {
+        std::cout << log_line << std::endl;
+    }
+
+    // In a real implementation, you might also write to a file based on configuration
+}
+
+bool shouldLogToConsole() {
+    std::string log_to_console = getEnvOrDefault("LOG_WRITE_TO_CONSOLE", "true");
+    // Convert to lowercase for comparison
+    std::transform(log_to_console.begin(), log_to_console.end(), log_to_console.begin(),
+                   [](unsigned char c){ return std::tolower(c); });
+    return log_to_console == "true" || log_to_console == "1" || log_to_console == "yes";
+}
+
+bool isLogLevelAtLeast(const std::string& level) {
+    std::string current_level = getEnvOrDefault("LOG_LEVEL", "info");
+    std::transform(current_level.begin(), current_level.end(), current_level.begin(),
+                   [](unsigned char c){ return std::tolower(c); });
+
+    // Define log level priorities
+    if (current_level == "debug") {
+        return true; // Debug level logs everything
+    } else if (current_level == "info") {
+        return level != "debug";
+    } else if (current_level == "warn") {
+        return level != "debug" && level != "info";
+    } else if (current_level == "error") {
+        return level == "error" || level == "fatal";
+    } else if (current_level == "fatal") {
+        return level == "fatal";
+    }
+
+    // Default to info level if unrecognized
+    return level != "debug";
+}
+
+void debugLog(const std::string& message) {
+    if (isLogLevelAtLeast("debug")) {
+        logMessage("DEBUG", message);
+    }
+}
+
+void infoLog(const std::string& message) {
+    if (isLogLevelAtLeast("info")) {
+        logMessage("INFO", message);
+    }
+}
+
+void warnLog(const std::string& message) {
+    if (isLogLevelAtLeast("warn")) {
+        logMessage("WARN", message);
+    }
+}
+
+void errorLog(const std::string& message) {
+    if (isLogLevelAtLeast("error")) {
+        logMessage("ERROR", message);
     }
 }
 

@@ -20,40 +20,58 @@ namespace webdav {
 
 void WebDAVRequestHandler::handleRequest(Poco::Net::HTTPServerRequest& request, Poco::Net::HTTPServerResponse& response) {
     std::string method = request.getMethod();
-    
+    std::string uri = request.getURI();
+
+    // Log the incoming request if debug level is enabled
+    webdav::debugLog("Received " + method + " request for URI: " + uri + " from " + request.clientAddress().toString());
+
     // Extract tenant from host
     std::string host = request.getHost();
     std::string tenant = extractTenantFromHost(host);
-    
+
     // Set default tenant if none found
     if (tenant.empty()) {
         tenant = "default";
     }
-    
+
+    webdav::debugLog("Resolved tenant: " + tenant + " from host: " + host);
+
     // Route to appropriate handler based on method
     if (method == "GET" || method == "HEAD") {
+        webdav::debugLog("Routing to GET/HEAD handler");
         handleGet(request, response);
     } else if (method == "PUT") {
+        webdav::debugLog("Routing to PUT handler");
         handlePut(request, response);
     } else if (method == "MKCOL") {
+        webdav::debugLog("Routing to MKCOL handler");
         handleMkcol(request, response);
     } else if (method == "DELETE") {
+        webdav::debugLog("Routing to DELETE handler");
         handleDelete(request, response);
     } else if (method == "PROPFIND") {
+        webdav::debugLog("Routing to PROPFIND handler");
         handlePropfind(request, response);
     } else if (method == "PROPPATCH") {
+        webdav::debugLog("Routing to PROPPATCH handler");
         handleProppatch(request, response);
     } else if (method == "COPY") {
+        webdav::debugLog("Routing to COPY handler");
         handleCopy(request, response);
     } else if (method == "MOVE") {
+        webdav::debugLog("Routing to MOVE handler");
         handleMove(request, response);
     } else if (method == "LOCK") {
+        webdav::debugLog("Routing to LOCK handler");
         handleLock(request, response);
     } else if (method == "UNLOCK") {
+        webdav::debugLog("Routing to UNLOCK handler");
         handleUnlock(request, response);
     } else {
+        webdav::debugLog("Unsupported method: " + method + " for URI: " + uri);
         response.setStatus(Poco::Net::HTTPResponse::HTTP_NOT_IMPLEMENTED);
         response.setReason("Method Not Implemented");
+        response.setContentType("text/plain");
         response.setContentLength(0);
         response.send();
     }
@@ -850,14 +868,18 @@ std::string WebDAVRequestHandler::extractTenantFromHost(const std::string& host)
 bool WebDAVRequestHandler::authenticateUser(Poco::Net::HTTPServerRequest& request, std::string& user, std::string& tenant, std::vector<std::string>& roles) {
     // Check for Authorization header
     std::string auth_header = request.get("Authorization", "");
+    webdav::debugLog("Processing authentication request with auth header length: " + std::to_string(auth_header.length()));
+
     if (auth_header.empty()) {
+        webdav::debugLog("No Authorization header found in request");
         return false;
     }
-    
+
     // Handle Basic Authentication
     if (auth_header.substr(0, 5) == "Basic") {
+        webdav::debugLog("Processing Basic authentication");
         std::string encoded_credentials = trim(auth_header.substr(6));
-        
+
         // Decode Base64 credentials
         std::istringstream istr(encoded_credentials);
         std::ostringstream ostr;
@@ -866,25 +888,41 @@ bool WebDAVRequestHandler::authenticateUser(Poco::Net::HTTPServerRequest& reques
         std::string credentials = ostr.str();
         size_t colon_pos = credentials.find(':');
         if (colon_pos == std::string::npos) {
+            webdav::debugLog("Invalid credentials format - no colon found");
             return false;
         }
-        
+
         std::string username = credentials.substr(0, colon_pos);
         std::string password = credentials.substr(colon_pos + 1);
-        
+
+        webdav::debugLog("Attempting to authenticate user: " + username);
+
         // Authenticate with LDAP
         UserInfo user_info = ldap_auth_->authenticateUser(username, password);
         if (!user_info.authenticated) {
+            webdav::debugLog("LDAP authentication failed for user: " + username);
             return false;
         }
-        
+
+        webdav::debugLog("LDAP authentication successful for user: " + username + " with roles: " +
+                         [&user_info]() {
+                             std::string roles_str;
+                             for (size_t i = 0; i < user_info.roles.size(); ++i) {
+                                 if (i > 0) roles_str += ",";
+                                 roles_str += user_info.roles[i];
+                             }
+                             return roles_str;
+                         }());
+
         user = user_info.user_id;
         tenant = user_info.tenant.empty() ? tenant : user_info.tenant; // Use extracted tenant if available
         roles = user_info.roles;
-        
+
         return true;
     }
-    
+
+    webdav::debugLog("Unsupported authentication scheme: " + auth_header.substr(0, auth_header.find(' ')));
+
     // For now, only Basic authentication is supported
     // Digest authentication would be implemented here if needed
     return false;

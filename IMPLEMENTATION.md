@@ -66,7 +66,7 @@ The service will authenticate users against the LDAP directory with the followin
 - `administrators` group → FULL permissions
 
 ### 4.3 Authentication Flow
-1. Extract credentials from WebDAV request (Basic Auth)
+1. Extract credentials from WebDAV request (Basic Auth or Digest Auth)
 2. Authenticate against LDAP directory using connection pool
 3. Retrieve user's roles and tenant membership
 4. Create AuthenticationContext for gRPC calls with user, roles, and tenant information
@@ -131,7 +131,13 @@ webdav_bridge/
 
 ## 8. Configuration
 
-The WebDAV bridge service will be configured through environment variables. The default configuration values are stored in `.env-default`, with the actual configuration coming from `.env` files or environment variables.
+The WebDAV bridge service will be configured through a combination of command-line options, environment variables, and configuration files. The default configuration values are stored in `.env-default`, with the actual configuration coming from `.env` files or environment variables.
+
+The service supports a command-line option to specify a custom configuration file:
+
+- `-c, --config <file_path>` - Path to a custom configuration file that overrides default settings
+
+When a custom configuration file is specified, it will take precedence over environment variables and default values.
 
 ### Configuration Options:
 
@@ -141,47 +147,70 @@ The WebDAV bridge service will be configured through environment variables. The 
 - `FILEENGINE_LDAP_DOMAIN` - LDAP domain/base DN (default: dc=rationalboxes,dc=com)
 - `FILEENGINE_LDAP_BIND_DN` - LDAP bind DN for service account (default: cn=admin,dc=rationalboxes,dc=com)
 - `FILEENGINE_LDAP_BIND_PASSWORD` - Password for LDAP bind account (default: admin)
-- `LOG_LEVEL` - Logging level (default: debug)
+- `POSTGRES_HOST` - Host address of the Postgres database (default: localhost)
+- `POSTGRES_PORT` - Port of the Postgres database (default: 5432)
+- `POSTGRES_DB` - Database name for persistent data storage (default: webdav_bridge)
+- `POSTGRES_USER` - Username for Postgres database access (default: postgres)
+- `POSTGRES_PASSWORD` - Password for Postgres database access
+- `LOG_LEVEL` - Logging level (default: debug); supports standard levels: trace, debug, info, warn, error, fatal; with very detailed logging for the `debug` level including all HTTP requests, authentication attempts, gRPC calls, and database operations
+- `LOG_FILE` - Path to the log file where logs will be written (default: stdout)
 
-## 9. LDAP Authentication Integration Plan
+## 9. Persistent Data Storage
 
-### 9.1 LDAP Connection Management
+The WebDAV bridge will utilize a Postgres database for storing persistent data that needs to survive service restarts. The database will store:
+
+- Path to UUID mappings for efficient path resolution
+- User session information (if required)
+- Cached LDAP user information to reduce directory queries
+- WebDAV-specific metadata that doesn't fit the FileEngine model
+- Lock information for WebDAV LOCK/UNLOCK operations
+- Operation logs for audit purposes
+
+Connection to the database will be managed through a connection pool to ensure efficient resource usage.
+
+## 10. LDAP Authentication Integration Plan
+
+### 10.1 LDAP Connection Management
 - Implement an LDAP connection pool to handle multiple concurrent authentication requests
 - Create a configuration system for LDAP server details (host, port, bind DN, password)
 - Support both direct binding and search+bind authentication methods
 
-### 9.2 User Authentication Flow
-- Extract username and password from WebDAV Basic Authentication header
+### 10.2 User Authentication Flow
+- Extract credentials from WebDAV request (supporting both Basic and Digest authentication)
+- For Basic Auth: extract username and password from the authorization header
+- For Digest Auth: validate the digest response against the stored password hash
 - Connect to LDAP server using connection pool
 - Attempt to bind with user credentials
 - On successful bind, retrieve user's group memberships and tenant association
 
-### 9.3 User Information Retrieval
+### 10.3 User Information Retrieval
 - Query LDAP for user's distinguished name (DN) using the username
 - Search for user's group memberships to determine roles (users, contributors, administrators)
 - Identify user's tenant by checking their organizational unit membership
 
-### 9.4 Role and Permission Mapping
+### 10.4 Role and Permission Mapping
 - Map LDAP group memberships to FileEngine permissions:
   - Members of `users` group → READ permissions
   - Members of `contributors` group → READ/WRITE permissions
   - Members of `administrators` group → FULL permissions
 - Construct the AuthenticationContext with user ID, roles, and tenant for gRPC calls
 
-### 9.5 Security Considerations
+### 10.5 Security Considerations
 - Use LDAPS (LDAP over SSL/TLS) for secure communication
+- Support both Basic and Digest authentication methods for WebDAV access
+- When using Basic Auth, ensure connections are encrypted with HTTPS
 - Implement proper credential sanitization to prevent injection attacks
 - Add rate limiting to prevent brute force attacks
 - Cache authentication results temporarily to reduce LDAP load
 
-## 10. Error Handling and Logging
+## 11. Error Handling and Logging
 
 - Implement comprehensive error handling for all WebDAV operations
 - Log all authentication attempts and operations for audit purposes
 - Return appropriate HTTP status codes for different error conditions
 - Implement retry mechanisms for transient failures
 
-## 11. Testing Strategy
+## 12. Testing Strategy
 
 - Unit tests for individual components (authentication, path resolution, gRPC client)
 - Integration tests for end-to-end WebDAV operations

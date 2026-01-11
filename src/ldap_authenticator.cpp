@@ -4,6 +4,7 @@
 #include <iostream>
 #include <algorithm>
 #include <stdexcept>
+#include <cctype>
 #include <ldap.h>
 
 namespace webdav {
@@ -24,7 +25,7 @@ LDAPAuthenticator::~LDAPAuthenticator() {
 
 UserInfo LDAPAuthenticator::authenticateUser(const std::string& username, const std::string& password) {
     std::lock_guard<std::mutex> lock(ldap_mutex_);
-    
+
     LDAP* ld = connectToLDAP();
     if (!ld) {
         std::cerr << "Failed to connect to LDAP server" << std::endl;
@@ -34,8 +35,8 @@ UserInfo LDAPAuthenticator::authenticateUser(const std::string& username, const 
     // First, try to bind with the user's credentials
     std::string user_dn;
     LDAPMessage* result = nullptr;
-    
-    // Search for the user's DN
+
+    // Search for the user's DN - make sure to search for groupOfNames entities too
     std::string search_filter = "(uid=" + username + ")";
     int ldap_result = ldap_search_s(
         ld,
@@ -84,7 +85,7 @@ UserInfo LDAPAuthenticator::authenticateUser(const std::string& username, const 
     struct berval cred;
     cred.bv_val = const_cast<char*>(password.c_str());
     cred.bv_len = password.length();
-    
+
     ldap_result = ldap_sasl_bind_s(
         ld,
         user_dn.c_str(),
@@ -96,7 +97,7 @@ UserInfo LDAPAuthenticator::authenticateUser(const std::string& username, const 
     );
 
     ldap_msgfree(result);
-    
+
     if (ldap_result != LDAP_SUCCESS) {
         std::cerr << "User authentication failed: " << ldap_err2string(ldap_result) << std::endl;
         ldap_unbind_ext_s(ld, nullptr, nullptr);
@@ -305,11 +306,12 @@ std::string LDAPAuthenticator::extractTenantFromUserDN(const std::string& user_d
 
 std::vector<std::string> LDAPAuthenticator::extractRolesFromGroups(LDAP* ld, const std::string& user_dn) {
     std::vector<std::string> roles;
-    
-    // Search for groups the user belongs to
-    std::string search_filter = "(member=" + user_dn + ")";
+
+    // Search for groupOfNames entities the user belongs to
+    // Using member attribute to find groups that contain this user
+    std::string search_filter = "(&(objectClass=groupOfNames)(member=" + user_dn + "))";
     LDAPMessage* result = nullptr;
-    
+
     int ldap_result = ldap_search_s(
         ld,
         ldap_domain_.c_str(),
@@ -322,23 +324,31 @@ std::vector<std::string> LDAPAuthenticator::extractRolesFromGroups(LDAP* ld, con
 
     if (ldap_result != LDAP_SUCCESS) {
         std::cerr << "Group search failed: " << ldap_err2string(ldap_result) << std::endl;
+        // If group search fails, assign default 'users' role
+        roles.push_back("users");
         return roles;
     }
 
+    // Iterate through all found groups
     for (LDAPMessage* entry = ldap_first_entry(ld, result); entry != nullptr; entry = ldap_next_entry(ld, entry)) {
         BerElement* ber = nullptr;
         char* attr = nullptr;
-        
+
+        // Look for cn attribute which typically contains the role name
         for (attr = ldap_first_attribute(ld, entry, &ber); attr != nullptr; attr = ldap_next_attribute(ld, entry, ber)) {
-            if (strcmp(attr, "cn") == 0 || strcmp(attr, "ou") == 0) {
+            if (strcmp(attr, "cn") == 0) {  // cn typically contains the group/role name
                 berval** vals = ldap_get_values_len(ld, entry, attr);
                 if (vals != nullptr) {
                     for (int i = 0; vals[i] != nullptr; i++) {
-                        std::string role(vals[i]->bv_val);
-                        
-                        // Standardize role names
-                        if (role == "users" || role == "contributors" || role == "administrators") {
-                            roles.push_back(role);
+                        std::string role_name(vals[i]->bv_val);
+
+                        // Standardize role names to match expected values
+                        if (role_name == "users" || role_name == "contributors" || role_name == "administrators" ||
+                            role_name == "Users" || role_name == "Contributors" || role_name == "Administrators" ||
+                            role_name == "user" || role_name == "contributor" || role_name == "administrator") {
+                            // Convert to lowercase for consistency
+                            std::transform(role_name.begin(), role_name.end(), role_name.begin(), ::tolower);
+                            roles.push_back(role_name);
                         }
                     }
                     ldap_value_free_len(vals);
@@ -352,12 +362,12 @@ std::vector<std::string> LDAPAuthenticator::extractRolesFromGroups(LDAP* ld, con
     }
 
     ldap_msgfree(result);
-    
+
     // If no specific roles found, assign default 'users' role
     if (roles.empty()) {
         roles.push_back("users");
     }
-    
+
     return roles;
 }
 

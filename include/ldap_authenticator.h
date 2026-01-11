@@ -23,7 +23,9 @@ public:
         const std::string& ldap_endpoint,
         const std::string& ldap_domain,
         const std::string& bind_dn,
-        const std::string& bind_password
+        const std::string& bind_password,
+        const std::string& tenant_base = "",
+        const std::string& user_base = ""
     );
     
     ~LDAPAuthenticator();
@@ -44,7 +46,9 @@ private:
     std::string ldap_domain_;
     std::string bind_dn_;
     std::string bind_password_;
-    
+    std::string tenant_base_;
+    std::string user_base_;
+
     mutable std::mutex ldap_mutex_;  // Protect LDAP operations
     
     // Helper function to connect to LDAP server

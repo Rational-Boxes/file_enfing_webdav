@@ -3,6 +3,7 @@
 #include <cctype>
 #include <iomanip>
 #include <sstream>
+#include <iostream>
 #include <Poco/DateTimeFormatter.h>
 #include <Poco/Timestamp.h>
 

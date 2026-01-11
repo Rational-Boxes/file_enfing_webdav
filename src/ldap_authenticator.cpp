@@ -40,11 +40,11 @@ UserInfo LDAPAuthenticator::authenticateUser(const std::string& username, const 
     std::string user_dn;
     LDAPMessage* result = nullptr;
 
-    // Search for the user's DN - make sure to search for groupOfNames entities too
+    // Search for the user's DN
     std::string search_filter = "(uid=" + username + ")";
     int ldap_result = ldap_search_s(
         ld,
-        ldap_domain_.c_str(),
+        user_base_.c_str(),  // Use the configured user base
         LDAP_SCOPE_SUBTREE,
         search_filter.c_str(),
         nullptr,
@@ -274,6 +274,8 @@ UserInfo LDAPAuthenticator::searchUser(LDAP* ld, const std::string& username) {
     user_info.dn = std::string(dn);
     user_info.user_id = username;
     user_info.tenant = extractTenantFromUserDN(user_info.dn);
+
+    // Extract roles from groups the user belongs to
     user_info.roles = extractRolesFromGroups(ld, user_info.dn);
     user_info.authenticated = false; // Will be set by caller
 
@@ -316,9 +318,12 @@ std::vector<std::string> LDAPAuthenticator::extractRolesFromGroups(LDAP* ld, con
     std::string search_filter = "(&(objectClass=groupOfNames)(member=" + user_dn + "))";
     LDAPMessage* result = nullptr;
 
+    // Use tenant_base_ if configured, otherwise fall back to ldap_domain_
+    std::string search_base = tenant_base_.empty() ? ldap_domain_ : tenant_base_;
+
     int ldap_result = ldap_search_s(
         ld,
-        tenant_base_.c_str(),  // Use the configured tenant base
+        search_base.c_str(),  // Use the configured tenant base or fallback to domain
         LDAP_SCOPE_SUBTREE,
         search_filter.c_str(),
         nullptr,
@@ -328,6 +333,7 @@ std::vector<std::string> LDAPAuthenticator::extractRolesFromGroups(LDAP* ld, con
 
     if (ldap_result != LDAP_SUCCESS) {
         std::cerr << "Group search failed: " << ldap_err2string(ldap_result) << std::endl;
+        std::cerr << "Search base: " << search_base << ", Filter: " << search_filter << std::endl;
         // If group search fails, assign default 'users' role
         roles.push_back("users");
         return roles;

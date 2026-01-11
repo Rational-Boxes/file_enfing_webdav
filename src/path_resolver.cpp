@@ -5,112 +5,16 @@
 
 namespace webdav {
 
-PathResolver::PathResolver(std::shared_ptr<GRPCClientWrapper> grpc_client,
-                         const std::string& db_connection_string)
-    : grpc_client_(grpc_client), db_connection_string_(db_connection_string) {
-    // Initialize the connection pool with a few connections
-    initializeConnectionPool();
+PathResolver::PathResolver(std::shared_ptr<GRPCClientWrapper> grpc_client)
+    : grpc_client_(grpc_client) {
+    // No database initialization needed - just use gRPC service directly
 }
-
-void PathResolver::initializeConnectionPool() {
-    std::lock_guard<std::mutex> lock(pool_mutex_);
-
-    // Create initial connections for the pool
-    for (size_t i = 0; i < 3; ++i) {  // Start with 3 connections
-        try {
-            auto conn = std::make_unique<pqxx::connection>(db_connection_string_);
-
-            // Initialize the database table if it doesn't exist
-            pqxx::work txn(*conn);
-            txn.exec("CREATE TABLE IF NOT EXISTS path_mappings ("
-                     "id SERIAL PRIMARY KEY, "
-                     "path TEXT NOT NULL, "
-                     "uuid TEXT NOT NULL, "
-                     "tenant TEXT NOT NULL, "
-                     "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "
-                     "UNIQUE(path, tenant))");
-            txn.commit();
-
-            available_connections_.push(conn.get());
-            connection_pool_.push_back(std::move(conn));
-        } catch (const std::exception& e) {
-            std::cerr << "Failed to initialize connection pool: " << e.what() << std::endl;
-            throw;
-        }
-    }
-}
-
-pqxx::connection* PathResolver::getConnection() {
-    std::lock_guard<std::mutex> lock(pool_mutex_);
-
-    if (!available_connections_.empty()) {
-        pqxx::connection* conn = available_connections_.front();
-        available_connections_.pop();
-        return conn;
-    }
-
-    // If pool is exhausted and we haven't reached max size, create a new connection
-    if (connection_pool_.size() < MAX_POOL_SIZE) {
-        try {
-            auto conn = std::make_unique<pqxx::connection>(db_connection_string_);
-            pqxx::connection* raw_conn = conn.get();
-            available_connections_.push(raw_conn);
-            connection_pool_.push_back(std::move(conn));
-            return raw_conn;
-        } catch (const std::exception& e) {
-            std::cerr << "Failed to create new connection: " << e.what() << std::endl;
-            return nullptr;
-        }
-    }
-
-    // Pool is full, wait or return null (in a real implementation, you might want to wait)
-    return nullptr;
-}
-
-void PathResolver::returnConnection(pqxx::connection* conn) {
-    if (conn) {
-        std::lock_guard<std::mutex> lock(pool_mutex_);
-        available_connections_.push(conn);
-    }
-}
-
-// Remove the ensureConnection method since we're using connection pooling
 
 std::string PathResolver::resolvePathToUUID(const std::string& path, const std::string& tenant) {
-    std::string cached_uuid;
-
-    // First, try to get from cache
-    {
-        std::lock_guard<std::mutex> lock(cache_mutex_);
-        auto it = path_to_uuid_cache_.find(getCacheKey(path, tenant));
-        if (it != path_to_uuid_cache_.end()) {
-            // Check if cache entry is still valid
-            if (std::chrono::steady_clock::now() < it->second.expiry_time) {
-                cached_uuid = it->second.value;
-            } else {
-                // Entry expired, remove it
-                path_to_uuid_cache_.erase(it);
-            }
-        }
-    }
-
-    // If we found a valid cached entry, return it
-    if (!cached_uuid.empty()) {
-        return cached_uuid;
-    }
-
-    // If not in cache or expired, get from DB
-    std::string uuid = getPathFromDB(path, tenant);
-    if (!uuid.empty()) {
-        // Add to cache with TTL
-        std::lock_guard<std::mutex> lock(cache_mutex_);
-        CacheEntry entry;
-        entry.value = uuid;
-        entry.expiry_time = std::chrono::steady_clock::now() + CACHE_TTL;
-        path_to_uuid_cache_[getCacheKey(path, tenant)] = entry;
-    }
-
-    return uuid;
+    // For now, we'll return an empty string since we're not implementing path-to-UUID mapping
+    // without database. In a real implementation, this would require a different approach
+    // to maintain path-to-UUID mappings without a database.
+    return "";
 }
 
 std::string PathResolver::resolveUUIDToPath(const std::string& uuid, const std::string& tenant) {

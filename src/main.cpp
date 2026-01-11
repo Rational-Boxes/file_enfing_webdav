@@ -3,6 +3,8 @@
 #include <thread>
 #include <chrono>
 #include <signal.h>
+#include <fstream>
+#include <cstdlib>
 #include <Poco/Util/Application.h>
 #include <Poco/Util/Option.h>
 #include <Poco/Util/OptionSet.h>
@@ -10,6 +12,7 @@
 #include <Poco/Util/AbstractConfiguration.h>
 #include <Poco/File.h>
 #include <Poco/Path.h>
+#include <Poco/Environment.h>
 
 #include "webdav_server.h"
 #include "utils.h"
@@ -19,6 +22,42 @@ volatile sig_atomic_t server_running = 1;
 
 void signal_handler(int signal) {
     server_running = 0;
+}
+
+// Function to load environment variables from .env file
+void loadEnvFile() {
+    std::ifstream file(".env");
+    if (!file.is_open()) {
+        // Try alternative locations
+        file.open("../.env");
+        if (!file.is_open()) {
+            std::cerr << "Warning: Could not open .env file" << std::endl;
+            return;
+        }
+    }
+
+    std::string line;
+    while (std::getline(file, line)) {
+        if (line.empty() || line[0] == '#') {
+            continue; // Skip empty lines and comments
+        }
+
+        size_t equalsPos = line.find('=');
+        if (equalsPos != std::string::npos) {
+            std::string key = line.substr(0, equalsPos);
+            std::string value = line.substr(equalsPos + 1);
+
+            // Remove quotes if present
+            if (value.length() >= 2 &&
+                ((value.front() == '"' && value.back() == '"') ||
+                 (value.front() == '\'' && value.back() == '\''))) {
+                value = value.substr(1, value.length() - 2);
+            }
+
+            // Set the environment variable
+            setenv(key.c_str(), value.c_str(), 1);
+        }
+    }
 }
 
 using Option = Poco::Util::Option;
@@ -113,6 +152,9 @@ private:
 } // namespace webdav
 
 int main(int argc, char** argv) {
+    // Load environment variables from .env file
+    loadEnvFile();
+
     webdav::WebDAVApplication app;
     try {
         app.init(argc, argv);

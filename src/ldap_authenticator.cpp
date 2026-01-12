@@ -32,7 +32,7 @@ UserInfo LDAPAuthenticator::authenticateUser(const std::string& username, const 
 
     LDAP* ld = connectToLDAP();
     if (!ld) {
-        std::cerr << "Failed to connect to LDAP server" << std::endl;
+        std::cerr << "[ERROR] Failed to connect to LDAP server" << std::endl;
         return { "", "", {}, "", false };
     }
 
@@ -42,6 +42,8 @@ UserInfo LDAPAuthenticator::authenticateUser(const std::string& username, const 
 
     // Search for the user's DN
     std::string search_filter = "(uid=" + username + ")";
+    std::cout << "[DEBUG] Searching for user with base: " << user_base_ << " and filter: " << search_filter << std::endl;
+
     int ldap_result = ldap_search_s(
         ld,
         user_base_.c_str(),  // Use the configured user base
@@ -53,14 +55,15 @@ UserInfo LDAPAuthenticator::authenticateUser(const std::string& username, const 
     );
 
     if (ldap_result != LDAP_SUCCESS) {
-        std::cerr << "LDAP search failed: " << ldap_err2string(ldap_result) << std::endl;
+        std::cerr << "[ERROR] LDAP search failed: " << ldap_err2string(ldap_result) << std::endl;
+        std::cerr << "[ERROR] Search base: " << user_base_ << ", Filter: " << search_filter << std::endl;
         ldap_unbind_ext_s(ld, nullptr, nullptr);
         return { "", "", {}, "", false };
     }
 
     int count = ldap_count_entries(ld, result);
     if (count != 1) {
-        std::cerr << "User not found or multiple entries found" << std::endl;
+        std::cerr << "[ERROR] User not found or multiple entries found (count: " << count << ")" << std::endl;
         ldap_msgfree(result);
         ldap_unbind_ext_s(ld, nullptr, nullptr);
         return { "", "", {}, "", false };
@@ -68,7 +71,7 @@ UserInfo LDAPAuthenticator::authenticateUser(const std::string& username, const 
 
     LDAPMessage* entry = ldap_first_entry(ld, result);
     if (!entry) {
-        std::cerr << "Failed to get LDAP entry" << std::endl;
+        std::cerr << "[ERROR] Failed to get LDAP entry" << std::endl;
         ldap_msgfree(result);
         ldap_unbind_ext_s(ld, nullptr, nullptr);
         return { "", "", {}, "", false };
@@ -76,7 +79,7 @@ UserInfo LDAPAuthenticator::authenticateUser(const std::string& username, const 
 
     char* dn = ldap_get_dn(ld, entry);
     if (!dn) {
-        std::cerr << "Failed to get DN" << std::endl;
+        std::cerr << "[ERROR] Failed to get DN" << std::endl;
         ldap_msgfree(result);
         ldap_unbind_ext_s(ld, nullptr, nullptr);
         return { "", "", {}, "", false };
@@ -100,18 +103,28 @@ UserInfo LDAPAuthenticator::authenticateUser(const std::string& username, const 
         nullptr
     );
 
-    ldap_msgfree(result);
-
     if (ldap_result != LDAP_SUCCESS) {
-        std::cerr << "User authentication failed: " << ldap_err2string(ldap_result) << std::endl;
+        std::cerr << "[ERROR] User authentication failed: " << ldap_err2string(ldap_result) << std::endl;
+        ldap_msgfree(result);
         ldap_unbind_ext_s(ld, nullptr, nullptr);
         return { "", "", {}, "", false };
     }
 
     // Authentication successful, now get user info
-    UserInfo user_info = searchUser(ld, username);
+    // We need to search for the user again to get their roles
+    UserInfo user_info;
+    user_info.dn = user_dn;
+    user_info.user_id = username;
+    user_info.tenant = extractTenantFromUserDN(user_dn);
+    user_info.roles = extractRolesFromGroups(ld, user_dn);  // Extract roles from groups
     user_info.authenticated = true;
 
+    std::cout << "[DEBUG] User authenticated: " << username << " with " << user_info.roles.size() << " roles" << std::endl;
+    for (size_t i = 0; i < user_info.roles.size(); ++i) {
+        std::cout << "[DEBUG]   Role " << i+1 << ": " << user_info.roles[i] << std::endl;
+    }
+
+    ldap_msgfree(result);
     ldap_unbind_ext_s(ld, nullptr, nullptr);
     return user_info;
 }
@@ -374,17 +387,27 @@ std::vector<std::string> LDAPAuthenticator::extractRolesFromGroups(LDAP* ld, con
         return roles;
     }
 
-    std::cout << "[DEBUG] Group search successful, found results" << std::endl;
+    std::cout << "[DEBUG] Group search successful, checking results" << std::endl;
+
+    // Count entries first to see how many were found
+    int total_entries = ldap_count_entries(ld, result);
+    std::cout << "[DEBUG] Total entries found: " << total_entries << std::endl;
 
     // Iterate through all found groups
     int group_count = 0;
-    for (LDAPMessage* entry = ldap_first_entry(ld, result); entry != nullptr; entry = ldap_next_entry(ld, entry)) {
+    LDAPMessage* entry = ldap_first_entry(ld, result);
+    while (entry != nullptr) {
         group_count++;
+        std::cout << "[DEBUG] Processing entry " << group_count << std::endl;
+
         BerElement* ber = nullptr;
         char* attr = nullptr;
 
         // Look for cn attribute which typically contains the role name
-        for (attr = ldap_first_attribute(ld, entry, &ber); attr != nullptr; attr = ldap_next_attribute(ld, entry, ber)) {
+        attr = ldap_first_attribute(ld, entry, &ber);
+        while (attr != nullptr) {
+            std::cout << "[DEBUG] Processing attribute: " << attr << std::endl;
+
             if (strcmp(attr, "cn") == 0) {  // cn typically contains the group/role name
                 berval** vals = ldap_get_values_len(ld, entry, attr);
                 if (vals != nullptr) {
@@ -408,14 +431,20 @@ std::vector<std::string> LDAPAuthenticator::extractRolesFromGroups(LDAP* ld, con
                     ldap_value_free_len(vals);
                 }
             }
+
+            char* next_attr = ldap_next_attribute(ld, entry, ber);
             ldap_memfree(attr);
+            attr = next_attr;
         }
+
         if (ber != nullptr) {
             ber_free(ber, 0);
         }
+
+        entry = ldap_next_entry(ld, entry);
     }
 
-    std::cout << "[DEBUG] Found " << group_count << " group(s) for user " << user_dn << std::endl;
+    std::cout << "[DEBUG] Processed " << group_count << " group(s) for user " << user_dn << std::endl;
 
     ldap_msgfree(result);
 

@@ -96,6 +96,7 @@ void WebDAVRequestHandler::handleGet(Poco::Net::HTTPServerRequest& request, Poco
     if (!authenticateUser(request, user, tenant, roles)) {
         response.setStatus(Poco::Net::HTTPResponse::HTTP_UNAUTHORIZED);
         response.setReason("Unauthorized");
+        response.set("WWW-Authenticate", "Basic realm=\"WebDAV Server\"");
         response.setContentType("text/plain");
         std::ostream& ostr = response.send();
         ostr << "Authentication required";
@@ -141,6 +142,7 @@ void WebDAVRequestHandler::handlePut(Poco::Net::HTTPServerRequest& request, Poco
     if (!authenticateUser(request, user, tenant, roles)) {
         response.setStatus(Poco::Net::HTTPResponse::HTTP_UNAUTHORIZED);
         response.setReason("Unauthorized");
+        response.set("WWW-Authenticate", "Basic realm=\"WebDAV Server\"");
         response.setContentType("text/plain");
         std::ostream& ostr = response.send();
         ostr << "Authentication required";
@@ -177,6 +179,7 @@ void WebDAVRequestHandler::handleMkcol(Poco::Net::HTTPServerRequest& request, Po
     if (!authenticateUser(request, user, tenant, roles)) {
         response.setStatus(Poco::Net::HTTPResponse::HTTP_UNAUTHORIZED);
         response.setReason("Unauthorized");
+        response.set("WWW-Authenticate", "Basic realm=\"WebDAV Server\"");
         response.setContentType("text/plain");
         std::ostream& ostr = response.send();
         ostr << "Authentication required";
@@ -208,6 +211,7 @@ void WebDAVRequestHandler::handleDelete(Poco::Net::HTTPServerRequest& request, P
     if (!authenticateUser(request, user, tenant, roles)) {
         response.setStatus(Poco::Net::HTTPResponse::HTTP_UNAUTHORIZED);
         response.setReason("Unauthorized");
+        response.set("WWW-Authenticate", "Basic realm=\"WebDAV Server\"");
         response.setContentType("text/plain");
         std::ostream& ostr = response.send();
         ostr << "Authentication required";
@@ -239,6 +243,7 @@ void WebDAVRequestHandler::handlePropfind(Poco::Net::HTTPServerRequest& request,
     if (!authenticateUser(request, user, tenant, roles)) {
         response.setStatus(Poco::Net::HTTPResponse::HTTP_UNAUTHORIZED);
         response.setReason("Unauthorized");
+        response.set("WWW-Authenticate", "Basic realm=\"WebDAV Server\"");
         response.setContentType("application/xml");
         std::ostream& ostr = response.send();
         ostr << "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n";
@@ -313,6 +318,7 @@ void WebDAVRequestHandler::handleProppatch(Poco::Net::HTTPServerRequest& request
     if (!authenticateUser(request, user, tenant, roles)) {
         response.setStatus(Poco::Net::HTTPResponse::HTTP_UNAUTHORIZED);
         response.setReason("Unauthorized");
+        response.set("WWW-Authenticate", "Basic realm=\"WebDAV Server\"");
         response.setContentType("text/plain");
         std::ostream& ostr = response.send();
         ostr << "Authentication required";
@@ -369,6 +375,7 @@ void WebDAVRequestHandler::handleCopy(Poco::Net::HTTPServerRequest& request, Poc
     if (!authenticateUser(request, user, tenant, roles)) {
         response.setStatus(Poco::Net::HTTPResponse::HTTP_UNAUTHORIZED);
         response.setReason("Unauthorized");
+        response.set("WWW-Authenticate", "Basic realm=\"WebDAV Server\"");
         response.setContentType("text/plain");
         std::ostream& ostr = response.send();
         ostr << "Authentication required";
@@ -413,6 +420,7 @@ void WebDAVRequestHandler::handleMove(Poco::Net::HTTPServerRequest& request, Poc
     if (!authenticateUser(request, user, tenant, roles)) {
         response.setStatus(Poco::Net::HTTPResponse::HTTP_UNAUTHORIZED);
         response.setReason("Unauthorized");
+        response.set("WWW-Authenticate", "Basic realm=\"WebDAV Server\"");
         response.setContentType("text/plain");
         std::ostream& ostr = response.send();
         ostr << "Authentication required";

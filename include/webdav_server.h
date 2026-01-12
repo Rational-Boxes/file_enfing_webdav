@@ -51,6 +51,7 @@ private:
     void handleMove(Poco::Net::HTTPServerRequest& request, Poco::Net::HTTPServerResponse& response);
     void handleLock(Poco::Net::HTTPServerRequest& request, Poco::Net::HTTPServerResponse& response);
     void handleUnlock(Poco::Net::HTTPServerRequest& request, Poco::Net::HTTPServerResponse& response);
+    void handleOptions(Poco::Net::HTTPServerRequest& request, Poco::Net::HTTPServerResponse& response);
 
     std::string extractTenantFromHost(const std::string& host);
     bool authenticateUser(Poco::Net::HTTPServerRequest& request, std::string& user, std::string& tenant, std::vector<std::string>& roles);

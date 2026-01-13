@@ -167,10 +167,20 @@ int main(int argc, char** argv) {
 
     webdav::WebDAVApplication app;
     try {
+        std::cout << "[DEBUG] Initializing WebDAV application..." << std::endl;
         app.init(argc, argv);
-        return app.run();
+        std::cout << "[DEBUG] Running WebDAV application..." << std::endl;
+        int result = app.run();
+        std::cout << "[DEBUG] WebDAV application finished with result: " << result << std::endl;
+        return result;
     } catch (Poco::Exception& exc) {
-        std::cerr << exc.displayText() << std::endl;
+        std::cerr << "[ERROR] Poco::Exception caught: " << exc.displayText() << std::endl;
+        return Poco::Util::Application::EXIT_SOFTWARE;
+    } catch (const std::exception& exc) {
+        std::cerr << "[ERROR] std::exception caught: " << exc.what() << std::endl;
+        return Poco::Util::Application::EXIT_SOFTWARE;
+    } catch (...) {
+        std::cerr << "[ERROR] Unknown exception caught in main" << std::endl;
         return Poco::Util::Application::EXIT_SOFTWARE;
     }
 }

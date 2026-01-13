@@ -1,6 +1,7 @@
 #define LDAP_DEPRECATED 1
 
 #include "ldap_authenticator.h"
+#include "utils.h"  // For logging functions
 #include <iostream>
 #include <algorithm>
 #include <stdexcept>
@@ -29,10 +30,11 @@ LDAPAuthenticator::~LDAPAuthenticator() {
 
 UserInfo LDAPAuthenticator::authenticateUser(const std::string& username, const std::string& password) {
     std::lock_guard<std::mutex> lock(ldap_mutex_);
+    webdav::debugLog("LDAPAuthenticator::authenticateUser: Starting authentication for user: " + username);
 
     LDAP* ld = connectToLDAP();
     if (!ld) {
-        std::cerr << "[ERROR] Failed to connect to LDAP server" << std::endl;
+        webdav::errorLog("LDAPAuthenticator::authenticateUser: Failed to connect to LDAP server");
         return { "", "", {}, "", false };
     }
 
@@ -42,7 +44,7 @@ UserInfo LDAPAuthenticator::authenticateUser(const std::string& username, const 
 
     // Search for the user's DN
     std::string search_filter = "(uid=" + username + ")";
-    std::cout << "[DEBUG] Searching for user with base: " << user_base_ << " and filter: " << search_filter << std::endl;
+    webdav::debugLog("LDAPAuthenticator::authenticateUser: Searching for user with base: " + user_base_ + " and filter: " + search_filter);
 
     int ldap_result = ldap_search_s(
         ld,
@@ -55,15 +57,15 @@ UserInfo LDAPAuthenticator::authenticateUser(const std::string& username, const 
     );
 
     if (ldap_result != LDAP_SUCCESS) {
-        std::cerr << "[ERROR] LDAP search failed: " << ldap_err2string(ldap_result) << std::endl;
-        std::cerr << "[ERROR] Search base: " << user_base_ << ", Filter: " << search_filter << std::endl;
+        webdav::errorLog("LDAPAuthenticator::authenticateUser: LDAP search failed: " + std::string(ldap_err2string(ldap_result)));
+        webdav::errorLog("LDAPAuthenticator::authenticateUser: Search base: " + user_base_ + ", Filter: " + search_filter);
         ldap_unbind_ext_s(ld, nullptr, nullptr);
         return { "", "", {}, "", false };
     }
 
     int count = ldap_count_entries(ld, result);
     if (count != 1) {
-        std::cerr << "[ERROR] User not found or multiple entries found (count: " << count << ")" << std::endl;
+        webdav::errorLog("LDAPAuthenticator::authenticateUser: User not found or multiple entries found (count: " + std::to_string(count) + ")");
         ldap_msgfree(result);
         ldap_unbind_ext_s(ld, nullptr, nullptr);
         return { "", "", {}, "", false };
@@ -71,7 +73,7 @@ UserInfo LDAPAuthenticator::authenticateUser(const std::string& username, const 
 
     LDAPMessage* entry = ldap_first_entry(ld, result);
     if (!entry) {
-        std::cerr << "[ERROR] Failed to get LDAP entry" << std::endl;
+        webdav::errorLog("LDAPAuthenticator::authenticateUser: Failed to get LDAP entry");
         ldap_msgfree(result);
         ldap_unbind_ext_s(ld, nullptr, nullptr);
         return { "", "", {}, "", false };
@@ -79,7 +81,7 @@ UserInfo LDAPAuthenticator::authenticateUser(const std::string& username, const 
 
     char* dn = ldap_get_dn(ld, entry);
     if (!dn) {
-        std::cerr << "[ERROR] Failed to get DN" << std::endl;
+        webdav::errorLog("LDAPAuthenticator::authenticateUser: Failed to get DN");
         ldap_msgfree(result);
         ldap_unbind_ext_s(ld, nullptr, nullptr);
         return { "", "", {}, "", false };
@@ -87,6 +89,7 @@ UserInfo LDAPAuthenticator::authenticateUser(const std::string& username, const 
 
     user_dn = std::string(dn);
     ldap_memfree(dn);
+    webdav::debugLog("LDAPAuthenticator::authenticateUser: Found user DN: " + user_dn);
 
     // Now try to bind with the user's DN and provided password
     struct berval cred;
@@ -104,11 +107,12 @@ UserInfo LDAPAuthenticator::authenticateUser(const std::string& username, const 
     );
 
     if (ldap_result != LDAP_SUCCESS) {
-        std::cerr << "[ERROR] User authentication failed: " << ldap_err2string(ldap_result) << std::endl;
+        webdav::errorLog("LDAPAuthenticator::authenticateUser: User authentication failed: " + std::string(ldap_err2string(ldap_result)));
         ldap_msgfree(result);
         ldap_unbind_ext_s(ld, nullptr, nullptr);
         return { "", "", {}, "", false };
     }
+    webdav::debugLog("LDAPAuthenticator::authenticateUser: User password authentication successful");
 
     // Authentication successful, now get user info
     // We need to search for the user again to get their roles
@@ -116,16 +120,29 @@ UserInfo LDAPAuthenticator::authenticateUser(const std::string& username, const 
     user_info.dn = user_dn;
     user_info.user_id = username;
     user_info.tenant = extractTenantFromUserDN(user_dn);
-    user_info.roles = extractRolesFromGroups(ld, user_dn);  // Extract roles from groups
+    webdav::debugLog("LDAPAuthenticator::authenticateUser: Extracting roles for user from groups...");
+
+    // Perform group search with admin credentials to ensure proper permissions
+    // The user connection may not have permission to search for group memberships
+    LDAP* admin_ld = connectToLDAP();  // Connect with admin credentials
+    if (admin_ld) {
+        user_info.roles = extractRolesFromGroups(admin_ld, user_dn);  // Extract roles from groups
+        ldap_unbind_ext_s(admin_ld, nullptr, nullptr);  // Clean up admin connection
+    } else {
+        webdav::errorLog("LDAPAuthenticator::authenticateUser: Failed to create admin connection for role extraction, assigning default 'users' role");
+        user_info.roles.push_back("users");  // Fallback to default role
+    }
+
     user_info.authenticated = true;
 
-    std::cout << "[DEBUG] User authenticated: " << username << " with " << user_info.roles.size() << " roles" << std::endl;
+    webdav::debugLog("LDAPAuthenticator::authenticateUser: User authenticated: " + username + " with " + std::to_string(user_info.roles.size()) + " roles");
     for (size_t i = 0; i < user_info.roles.size(); ++i) {
-        std::cout << "[DEBUG]   Role " << i+1 << ": " << user_info.roles[i] << std::endl;
+        webdav::debugLog("LDAPAuthenticator::authenticateUser:   Role " + std::to_string(i+1) + ": " + user_info.roles[i]);
     }
 
     ldap_msgfree(result);
     ldap_unbind_ext_s(ld, nullptr, nullptr);
+    webdav::debugLog("LDAPAuthenticator::authenticateUser: Completed authentication for user: " + username);
     return user_info;
 }
 
@@ -340,113 +357,406 @@ std::vector<std::string> LDAPAuthenticator::extractRolesFromGroups(LDAP* ld, con
     // Search for groupOfNames entities the user belongs to
     // Using member attribute to find groups that contain this user
     std::string search_filter = "(&(objectClass=groupOfNames)(member=" + user_dn + "))";
-    LDAPMessage* result = nullptr;
+    webdav::debugLog("LDAPAuthenticator::extractRolesFromGroups: Starting group search for user: " + std::string(user_dn));
+    webdav::debugLog("LDAPAuthenticator::extractRolesFromGroups: Tenant base: '" + tenant_base_ + "'");
+    webdav::debugLog("LDAPAuthenticator::extractRolesFromGroups: LDAP domain: '" + ldap_domain_ + "'");
 
-    // Use tenant_base_ if configured, otherwise fall back to ldap_domain_
-    // For the default tenant, we should look in ou=default under the tenant base
-    std::cout << "[DEBUG] Starting group search for user: " << user_dn << std::endl;
-    std::cout << "[DEBUG] Tenant base: '" << tenant_base_ << "'" << std::endl;
-    std::cout << "[DEBUG] LDAP domain: '" << ldap_domain_ << "'" << std::endl;
+    // Based on your information, the groups are under ou=default,ou=tenants,dc=rationalboxes,dc=com
+    // So let's make sure we search there specifically
+    std::vector<std::string> possible_bases;
 
-    std::string search_base;
+    // Add the specific location where groups are known to exist
+    possible_bases.push_back("ou=default,ou=tenants," + ldap_domain_);
+
+    // Add tenant-specific base if configured
     if (!tenant_base_.empty()) {
-        // If tenant_base is configured, look for default tenant under that base
-        // Check if the tenant_base already includes the tenant OU
-        if (tenant_base_.find("ou=default") == 0) {
-            // tenant_base already specifies the default tenant
-            search_base = tenant_base_;
-        } else {
-            // Prepend ou=default to the tenant base
-            search_base = "ou=default," + tenant_base_;
+        possible_bases.push_back(tenant_base_);
+        // Also try tenant base without specific tenant (for default tenant)
+        if (tenant_base_.find("ou=default") == std::string::npos) {
+            possible_bases.push_back("ou=default," + tenant_base_);
         }
-    } else {
-        // Otherwise, construct the full path to default tenant
-        search_base = "ou=default,ou=tenants," + ldap_domain_;
     }
 
-    std::cout << "[DEBUG] Using search base: '" << search_base << "'" << std::endl;
-    std::cout << "[DEBUG] Using search filter: '" << search_filter << "'" << std::endl;
+    // Add domain base
+    possible_bases.push_back(ldap_domain_);
 
-    std::cout << "[DEBUG] Searching for groups with base: " << search_base << " and filter: " << search_filter << std::endl;
+    // Add common organizational unit patterns
+    possible_bases.push_back("ou=groups," + ldap_domain_);
+    possible_bases.push_back("ou=Group," + ldap_domain_);
+    possible_bases.push_back("ou=Roles," + ldap_domain_);
+    possible_bases.push_back("ou=role," + ldap_domain_);
+    possible_bases.push_back("ou=tenants," + ldap_domain_);
+    possible_bases.push_back("ou=users," + ldap_domain_);
 
-    int ldap_result = ldap_search_s(
-        ld,
-        search_base.c_str(),  // Use the configured tenant base or fallback to domain
-        LDAP_SCOPE_SUBTREE,
-        search_filter.c_str(),
-        nullptr,
-        false,
-        &result
-    );
+    LDAPMessage* result = nullptr;
+    int ldap_result = LDAP_NO_SUCH_OBJECT; // Initialize to error state
 
-    if (ldap_result != LDAP_SUCCESS) {
-        std::cerr << "[ERROR] Group search failed: " << ldap_err2string(ldap_result) << std::endl;
-        std::cerr << "[ERROR] Search base: " << search_base << ", Filter: " << search_filter << std::endl;
-        // If group search fails, assign default 'users' role
-        roles.push_back("users");
-        return roles;
-    }
+    // Try each possible base until we find groups or exhaust options
+    for (const std::string& search_base : possible_bases) {
+        webdav::debugLog("LDAPAuthenticator::extractRolesFromGroups: Trying search base: '" + search_base + "'");
+        webdav::debugLog("LDAPAuthenticator::extractRolesFromGroups: Using search filter: '" + search_filter + "'");
+        webdav::debugLog("LDAPAuthenticator::extractRolesFromGroups: About to call ldap_search_s with base: " + search_base + ", filter: " + search_filter);
 
-    std::cout << "[DEBUG] Group search successful, checking results" << std::endl;
+        ldap_result = ldap_search_s(
+            ld,
+            search_base.c_str(),
+            LDAP_SCOPE_SUBTREE,
+            search_filter.c_str(),
+            nullptr,
+            false,
+            &result
+        );
 
-    // Count entries first to see how many were found
-    int total_entries = ldap_count_entries(ld, result);
-    std::cout << "[DEBUG] Total entries found: " << total_entries << std::endl;
+        webdav::debugLog("LDAPAuthenticator::extractRolesFromGroups: ldap_search_s returned: " + std::to_string(ldap_result) + ", result pointer: " + (result ? "valid" : "NULL"));
 
-    // Iterate through all found groups
-    int group_count = 0;
-    LDAPMessage* entry = ldap_first_entry(ld, result);
-    while (entry != nullptr) {
-        group_count++;
-        std::cout << "[DEBUG] Processing entry " << group_count << std::endl;
+        if (ldap_result == LDAP_SUCCESS) {
+            webdav::debugLog("LDAPAuthenticator::extractRolesFromGroups: Group search successful with base: " + search_base);
 
-        BerElement* ber = nullptr;
-        char* attr = nullptr;
+            // Count entries first to see how many were found
+            int total_entries = ldap_count_entries(ld, result);
+            webdav::debugLog("LDAPAuthenticator::extractRolesFromGroups: Total entries found in this base: " + std::to_string(total_entries));
 
-        // Look for cn attribute which typically contains the role name
-        attr = ldap_first_attribute(ld, entry, &ber);
-        while (attr != nullptr) {
-            std::cout << "[DEBUG] Processing attribute: " << attr << std::endl;
+            // Process all entries in this base
+            int group_count = 0;
+            LDAPMessage* entry = ldap_first_entry(ld, result);
+            webdav::debugLog("LDAPAuthenticator::extractRolesFromGroups: ldap_first_entry returned: " + std::string(entry ? "valid entry" : "NULL"));
 
-            if (strcmp(attr, "cn") == 0) {  // cn typically contains the group/role name
-                berval** vals = ldap_get_values_len(ld, entry, attr);
-                if (vals != nullptr) {
-                    for (int i = 0; vals[i] != nullptr; i++) {
-                        std::string role_name(vals[i]->bv_val);
+            while (entry != nullptr) {
+                group_count++;
+                webdav::debugLog("LDAPAuthenticator::extractRolesFromGroups: Processing entry " + std::to_string(group_count) + " in base " + search_base);
 
-                        std::cout << "[DEBUG] Found group with role name: " << role_name << std::endl;
-
-                        // Standardize role names to match expected values
-                        if (role_name == "users" || role_name == "contributors" || role_name == "administrators" ||
-                            role_name == "Users" || role_name == "Contributors" || role_name == "Administrators" ||
-                            role_name == "user" || role_name == "contributor" || role_name == "administrator") {
-                            // Convert to lowercase for consistency
-                            std::transform(role_name.begin(), role_name.end(), role_name.begin(), ::tolower);
-                            roles.push_back(role_name);
-                            std::cout << "[DEBUG] Assigned role: " << role_name << " to user" << std::endl;
-                        } else {
-                            std::cout << "[DEBUG] Ignoring unrecognized role: " << role_name << std::endl;
-                        }
-                    }
-                    ldap_value_free_len(vals);
+                // Get the DN of this entry for debugging
+                char* entry_dn = ldap_get_dn(ld, entry);
+                if (entry_dn) {
+                    webdav::debugLog("LDAPAuthenticator::extractRolesFromGroups: Entry DN: " + std::string(entry_dn));
+                    ldap_memfree(entry_dn);
                 }
+
+                BerElement* ber = nullptr;
+                char* attr = ldap_first_attribute(ld, entry, &ber);
+                webdav::debugLog("LDAPAuthenticator::extractRolesFromGroups: First attribute: " + std::string(attr ? attr : "NULL"));
+
+                // Look for various attributes that might contain the role name
+                while (attr != nullptr) {
+                    webdav::debugLog("LDAPAuthenticator::extractRolesFromGroups: Processing attribute: " + std::string(attr));
+
+                    // Check for common role/group name attributes
+                    if (strcmp(attr, "cn") == 0 || strcmp(attr, "ou") == 0 || strcmp(attr, "name") == 0 || strcmp(attr, "gid") == 0) {
+                        berval** vals = ldap_get_values_len(ld, entry, attr);
+                        webdav::debugLog("LDAPAuthenticator::extractRolesFromGroups: ldap_get_values_len returned: " + std::string(vals ? "valid values" : "NULL"));
+
+                        if (vals != nullptr) {
+                            int val_count = 0;
+                            for (int i = 0; vals[i] != nullptr; i++) {
+                                val_count++;
+                                std::string role_name(vals[i]->bv_val);
+                                webdav::debugLog("LDAPAuthenticator::extractRolesFromGroups: Value " + std::to_string(i) + " for attribute " + std::string(attr) + ": " + role_name);
+
+                                webdav::debugLog("LDAPAuthenticator::extractRolesFromGroups: Found group with role name: " + role_name);
+
+                                // Convert to lowercase for consistency and add to roles
+                                std::transform(role_name.begin(), role_name.end(), role_name.begin(), ::tolower);
+                                webdav::debugLog("LDAPAuthenticator::extractRolesFromGroups: Transformed role name to lowercase: " + role_name);
+
+                                // Only add if not already in the list to avoid duplicates
+                                bool found = false;
+                                for (const std::string& existing_role : roles) {
+                                    if (existing_role == role_name) {
+                                        found = true;
+                                        webdav::debugLog("LDAPAuthenticator::extractRolesFromGroups: Role " + role_name + " already exists in roles list");
+                                        break;
+                                    }
+                                }
+                                if (!found) {
+                                    roles.push_back(role_name);
+                                    webdav::debugLog("LDAPAuthenticator::extractRolesFromGroups: Assigned role: " + role_name + " to user, total roles now: " + std::to_string(roles.size()));
+                                } else {
+                                    webdav::debugLog("LDAPAuthenticator::extractRolesFromGroups: Skipped duplicate role: " + role_name);
+                                }
+                            }
+                            webdav::debugLog("LDAPAuthenticator::extractRolesFromGroups: Processed " + std::to_string(val_count) + " values for attribute " + std::string(attr));
+                            ldap_value_free_len(vals);
+                        } else {
+                            webdav::debugLog("LDAPAuthenticator::extractRolesFromGroups: No values found for attribute: " + std::string(attr));
+                        }
+                    } else {
+                        webdav::debugLog("LDAPAuthenticator::extractRolesFromGroups: Skipping attribute (not in target list): " + std::string(attr));
+                    }
+
+                    char* next_attr = ldap_next_attribute(ld, entry, ber);
+                    webdav::debugLog("LDAPAuthenticator::extractRolesFromGroups: Next attribute: " + std::string(next_attr ? next_attr : "NULL"));
+                    ldap_memfree(attr);
+                    attr = next_attr;
+                }
+
+                if (ber != nullptr) {
+                    ber_free(ber, 0);
+                }
+
+                LDAPMessage* next_entry = ldap_next_entry(ld, entry);
+                webdav::debugLog("LDAPAuthenticator::extractRolesFromGroups: Next entry: " + std::string(next_entry ? "valid" : "NULL"));
+                entry = next_entry;
             }
 
-            char* next_attr = ldap_next_attribute(ld, entry, ber);
-            ldap_memfree(attr);
-            attr = next_attr;
-        }
+            webdav::debugLog("LDAPAuthenticator::extractRolesFromGroups: Processed " + std::to_string(group_count) + " group(s) in base " + search_base);
 
-        if (ber != nullptr) {
-            ber_free(ber, 0);
+            // Continue to other bases to collect all possible roles
+            ldap_msgfree(result);
+            result = nullptr; // Reset for next iteration
+        } else {
+            webdav::debugLog("LDAPAuthenticator::extractRolesFromGroups: Group search failed with base " + search_base + ": " + std::string(ldap_err2string(ldap_result)));
+            if (result) {
+                ldap_msgfree(result);
+                result = nullptr;
+            }
         }
-
-        entry = ldap_next_entry(ld, entry);
     }
 
-    std::cout << "[DEBUG] Processed " << group_count << " group(s) for user " << user_dn << std::endl;
+    // If we didn't find any roles from any base, try a broader search
+    if (roles.empty()) {
+        // Try searching with a more generic filter that might catch different group types
+        std::string alt_search_filter = "(member=" + user_dn + ")";
+        webdav::debugLog("LDAPAuthenticator::extractRolesFromGroups: Trying alternative search with filter: '" + alt_search_filter + "'");
 
-    ldap_msgfree(result);
+        // Specifically try the known location again with the broader filter
+        std::string known_location = "ou=default,ou=tenants," + ldap_domain_;
+        webdav::debugLog("LDAPAuthenticator::extractRolesFromGroups: Trying known location: " + known_location);
+
+        ldap_result = ldap_search_s(
+            ld,
+            known_location.c_str(),
+            LDAP_SCOPE_SUBTREE,
+            alt_search_filter.c_str(),
+            nullptr,
+            false,
+            &result
+        );
+
+        if (ldap_result == LDAP_SUCCESS) {
+            webdav::debugLog("LDAPAuthenticator::extractRolesFromGroups: Alternative search successful in known location: " + known_location);
+
+            int total_entries = ldap_count_entries(ld, result);
+            webdav::debugLog("LDAPAuthenticator::extractRolesFromGroups: Total entries found in alternative search: " + std::to_string(total_entries));
+
+            int group_count = 0;
+            LDAPMessage* entry = ldap_first_entry(ld, result);
+            while (entry != nullptr) {
+                group_count++;
+
+                // Get the group DN to extract potential role name
+                char* group_dn = ldap_get_dn(ld, entry);
+                if (group_dn) {
+                    std::string group_dn_str(group_dn);
+                    webdav::debugLog("LDAPAuthenticator::extractRolesFromGroups: Processing group DN: " + group_dn_str);
+
+                    // Try to extract role name from DN
+                    size_t pos = group_dn_str.find("cn=");
+                    if (pos != std::string::npos) {
+                        pos += 3; // Skip "cn="
+                        size_t end_pos = group_dn_str.find(",", pos);
+                        if (end_pos == std::string::npos) {
+                            end_pos = group_dn_str.length();
+                        }
+                        std::string role_name = group_dn_str.substr(pos, end_pos - pos);
+
+                        std::transform(role_name.begin(), role_name.end(), role_name.begin(), ::tolower);
+
+                        // Only add if not already in the list
+                        bool found = false;
+                        for (const std::string& existing_role : roles) {
+                            if (existing_role == role_name) {
+                                found = true;
+                                break;
+                            }
+                        }
+                        if (!found) {
+                            roles.push_back(role_name);
+                            webdav::debugLog("LDAPAuthenticator::extractRolesFromGroups: Assigned role from DN: " + role_name + " to user");
+                        }
+                    }
+
+                    ldap_memfree(group_dn);
+                }
+
+                // Also check attributes as before
+                BerElement* ber = nullptr;
+                char* attr = ldap_first_attribute(ld, entry, &ber);
+                while (attr != nullptr) {
+                    if (strcmp(attr, "cn") == 0 || strcmp(attr, "ou") == 0 || strcmp(attr, "name") == 0 || strcmp(attr, "gid") == 0) {
+                        berval** vals = ldap_get_values_len(ld, entry, attr);
+                        if (vals != nullptr) {
+                            for (int i = 0; vals[i] != nullptr; i++) {
+                                std::string role_name(vals[i]->bv_val);
+
+                                webdav::debugLog("LDAPAuthenticator::extractRolesFromGroups: Found group with role name: " + role_name);
+
+                                std::transform(role_name.begin(), role_name.end(), role_name.begin(), ::tolower);
+
+                                bool found = false;
+                                for (const std::string& existing_role : roles) {
+                                    if (existing_role == role_name) {
+                                        found = true;
+                                        break;
+                                    }
+                                }
+                                if (!found) {
+                                    roles.push_back(role_name);
+                                    webdav::debugLog("LDAPAuthenticator::extractRolesFromGroups: Assigned role: " + role_name + " to user");
+                                }
+                            }
+                            ldap_value_free_len(vals);
+                        }
+                    }
+
+                    char* next_attr = ldap_next_attribute(ld, entry, ber);
+                    ldap_memfree(attr);
+                    attr = next_attr;
+                }
+
+                if (ber != nullptr) {
+                    ber_free(ber, 0);
+                }
+
+                entry = ldap_next_entry(ld, entry);
+            }
+
+            ldap_msgfree(result);
+        } else {
+            webdav::debugLog("LDAPAuthenticator::extractRolesFromGroups: Alternative search failed in known location: " + known_location + ", error: " + std::string(ldap_err2string(ldap_result)));
+        }
+    }
+
+    // If still no roles found, try a different approach - maybe the groups have different objectClass
+    if (roles.empty()) {
+        webdav::debugLog("LDAPAuthenticator::extractRolesFromGroups: No roles found with groupOfNames, trying groupMembership/uniqueMember approach");
+
+        // Extract username from user_dn (assuming format like "uid=username,ou=...")
+        std::string extracted_username = user_dn;
+        size_t uid_start = user_dn.find("uid=");
+        if (uid_start != std::string::npos) {
+            uid_start += 4; // Skip "uid="
+            size_t uid_end = user_dn.find(",", uid_start);
+            if (uid_end != std::string::npos) {
+                extracted_username = user_dn.substr(uid_start, uid_end - uid_start);
+            } else {
+                extracted_username = user_dn.substr(uid_start);
+            }
+        }
+
+        // Try searching for groups using member/uniqueMember attribute instead of member
+        std::string alt_search_filter2 = "(|(member=" + user_dn + ")(uniqueMember=" + user_dn + ")(memberUid=" + extracted_username + "))";
+        std::string search_base2 = "ou=default,ou=tenants," + ldap_domain_;
+
+        webdav::debugLog("LDAPAuthenticator::extractRolesFromGroups: Trying alternative filter: " + alt_search_filter2 + " in base: " + search_base2);
+
+        ldap_result = ldap_search_s(
+            ld,
+            search_base2.c_str(),
+            LDAP_SCOPE_SUBTREE,
+            alt_search_filter2.c_str(),
+            nullptr,
+            false,
+            &result
+        );
+
+        if (ldap_result == LDAP_SUCCESS) {
+            webdav::debugLog("LDAPAuthenticator::extractRolesFromGroups: Alternative search 2 successful");
+
+            int total_entries = ldap_count_entries(ld, result);
+            webdav::debugLog("LDAPAuthenticator::extractRolesFromGroups: Total entries found in alternative search 2: " + std::to_string(total_entries));
+
+            int group_count = 0;
+            LDAPMessage* entry = ldap_first_entry(ld, result);
+            while (entry != nullptr) {
+                group_count++;
+
+                // Get the group DN to extract potential role name
+                char* group_dn = ldap_get_dn(ld, entry);
+                if (group_dn) {
+                    std::string group_dn_str(group_dn);
+                    webdav::debugLog("LDAPAuthenticator::extractRolesFromGroups: Processing group DN (alt2): " + group_dn_str);
+
+                    // Try to extract role name from DN
+                    size_t pos = group_dn_str.find("cn=");
+                    if (pos != std::string::npos) {
+                        pos += 3; // Skip "cn="
+                        size_t end_pos = group_dn_str.find(",", pos);
+                        if (end_pos == std::string::npos) {
+                            end_pos = group_dn_str.length();
+                        }
+                        std::string role_name = group_dn_str.substr(pos, end_pos - pos);
+
+                        std::transform(role_name.begin(), role_name.end(), role_name.begin(), ::tolower);
+
+                        // Only add if not already in the list
+                        bool found = false;
+                        for (const std::string& existing_role : roles) {
+                            if (existing_role == role_name) {
+                                found = true;
+                                break;
+                            }
+                        }
+                        if (!found) {
+                            roles.push_back(role_name);
+                            webdav::debugLog("LDAPAuthenticator::extractRolesFromGroups: Assigned role from DN (alt2): " + role_name + " to user");
+                        }
+                    }
+
+                    ldap_memfree(group_dn);
+                }
+
+                // Also check attributes
+                BerElement* ber = nullptr;
+                char* attr = ldap_first_attribute(ld, entry, &ber);
+                while (attr != nullptr) {
+                    if (strcmp(attr, "cn") == 0 || strcmp(attr, "ou") == 0 || strcmp(attr, "name") == 0 || strcmp(attr, "gid") == 0) {
+                        berval** vals = ldap_get_values_len(ld, entry, attr);
+                        if (vals != nullptr) {
+                            for (int i = 0; vals[i] != nullptr; i++) {
+                                std::string role_name(vals[i]->bv_val);
+
+                                webdav::debugLog("LDAPAuthenticator::extractRolesFromGroups: Found group with role name (alt2): " + role_name);
+
+                                std::transform(role_name.begin(), role_name.end(), role_name.begin(), ::tolower);
+
+                                bool found = false;
+                                for (const std::string& existing_role : roles) {
+                                    if (existing_role == role_name) {
+                                        found = true;
+                                        break;
+                                    }
+                                }
+                                if (!found) {
+                                    roles.push_back(role_name);
+                                    webdav::debugLog("LDAPAuthenticator::extractRolesFromGroups: Assigned role (alt2): " + role_name + " to user");
+                                }
+                            }
+                            ldap_value_free_len(vals);
+                        }
+                    }
+
+                    char* next_attr = ldap_next_attribute(ld, entry, ber);
+                    ldap_memfree(attr);
+                    attr = next_attr;
+                }
+
+                if (ber != nullptr) {
+                    ber_free(ber, 0);
+                }
+
+                entry = ldap_next_entry(ld, entry);
+            }
+
+            ldap_msgfree(result);
+        } else {
+            webdav::debugLog("LDAPAuthenticator::extractRolesFromGroups: Alternative search 2 also failed: " + std::string(ldap_err2string(ldap_result)));
+        }
+    }
+
+    webdav::debugLog("LDAPAuthenticator::extractRolesFromGroups: Total processed groups for user " + user_dn + ", found " + std::to_string(roles.size()) + " roles");
+    for (size_t i = 0; i < roles.size(); ++i) {
+        webdav::debugLog("LDAPAuthenticator::extractRolesFromGroups:   Role " + std::to_string(i+1) + ": " + roles[i]);
+    }
 
     // If no specific roles found, assign default 'users' role
     if (roles.empty()) {

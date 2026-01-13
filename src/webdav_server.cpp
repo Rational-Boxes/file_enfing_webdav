@@ -22,8 +22,7 @@ void WebDAVRequestHandler::handleRequest(Poco::Net::HTTPServerRequest& request, 
     std::string method = request.getMethod();
     std::string uri = request.getURI();
 
-    // Log the incoming request if debug level is enabled
-    webdav::debugLog("Received " + method + " request for URI: " + uri + " from " + request.clientAddress().toString());
+    webdav::debugLog("WebDAVRequestHandler: Processing request - Method: " + method + ", URI: " + uri + ", Client: " + request.clientAddress().toString());
 
     // Extract tenant from host
     std::string host = request.getHost();
@@ -34,50 +33,52 @@ void WebDAVRequestHandler::handleRequest(Poco::Net::HTTPServerRequest& request, 
         tenant = "default";
     }
 
-    webdav::debugLog("Resolved tenant: " + tenant + " from host: " + host);
+    webdav::debugLog("WebDAVRequestHandler: Resolved tenant: " + tenant + " from host: " + host);
 
     // Route to appropriate handler based on method
     if (method == "GET" || method == "HEAD") {
-        webdav::debugLog("Routing to GET/HEAD handler");
+        webdav::debugLog("WebDAVRequestHandler: Routing to GET/HEAD handler");
         handleGet(request, response);
     } else if (method == "PUT") {
-        webdav::debugLog("Routing to PUT handler");
+        webdav::debugLog("WebDAVRequestHandler: Routing to PUT handler");
         handlePut(request, response);
     } else if (method == "MKCOL") {
-        webdav::debugLog("Routing to MKCOL handler");
+        webdav::debugLog("WebDAVRequestHandler: Routing to MKCOL handler");
         handleMkcol(request, response);
     } else if (method == "DELETE") {
-        webdav::debugLog("Routing to DELETE handler");
+        webdav::debugLog("WebDAVRequestHandler: Routing to DELETE handler");
         handleDelete(request, response);
     } else if (method == "PROPFIND") {
-        webdav::debugLog("Routing to PROPFIND handler");
+        webdav::debugLog("WebDAVRequestHandler: Routing to PROPFIND handler");
         handlePropfind(request, response);
     } else if (method == "PROPPATCH") {
-        webdav::debugLog("Routing to PROPPATCH handler");
+        webdav::debugLog("WebDAVRequestHandler: Routing to PROPPATCH handler");
         handleProppatch(request, response);
     } else if (method == "COPY") {
-        webdav::debugLog("Routing to COPY handler");
+        webdav::debugLog("WebDAVRequestHandler: Routing to COPY handler");
         handleCopy(request, response);
     } else if (method == "MOVE") {
-        webdav::debugLog("Routing to MOVE handler");
+        webdav::debugLog("WebDAVRequestHandler: Routing to MOVE handler");
         handleMove(request, response);
     } else if (method == "LOCK") {
-        webdav::debugLog("Routing to LOCK handler");
+        webdav::debugLog("WebDAVRequestHandler: Routing to LOCK handler");
         handleLock(request, response);
     } else if (method == "UNLOCK") {
-        webdav::debugLog("Routing to UNLOCK handler");
+        webdav::debugLog("WebDAVRequestHandler: Routing to UNLOCK handler");
         handleUnlock(request, response);
     } else if (method == "OPTIONS") {
-        webdav::debugLog("Routing to OPTIONS handler");
+        webdav::debugLog("WebDAVRequestHandler: Routing to OPTIONS handler");
         handleOptions(request, response);
     } else {
-        webdav::debugLog("Unsupported method: " + method + " for URI: " + uri);
+        webdav::debugLog("WebDAVRequestHandler: Unsupported method: " + method + " for URI: " + uri);
         response.setStatus(Poco::Net::HTTPResponse::HTTP_NOT_IMPLEMENTED);
         response.setReason("Method Not Implemented");
         response.setContentType("text/plain");
         response.setContentLength(0);
         response.send();
     }
+
+    webdav::debugLog("WebDAVRequestHandler: Completed request processing - Method: " + method + ", URI: " + uri);
 }
 
 void WebDAVRequestHandler::handleGet(Poco::Net::HTTPServerRequest& request, Poco::Net::HTTPServerResponse& response) {
@@ -103,27 +104,64 @@ void WebDAVRequestHandler::handleGet(Poco::Net::HTTPServerRequest& request, Poco
         return;
     }
 
-    // For root path, return a simple directory listing
-    if (path == "/" || path == "/index.html") {
-        response.setStatus(Poco::Net::HTTPResponse::HTTP_OK);
-        response.setReason("OK");
-        response.setContentType("text/html");
+    // Create authentication context for gRPC
+    fileengine_rpc::AuthenticationContext auth_ctx;
+    auth_ctx.set_user(user);
+    auth_ctx.set_tenant(tenant);
+    for (const auto& role : roles) {
+        auth_ctx.add_roles(role);
+    }
+
+    // Resolve path to UUID using path resolver
+    std::string file_uuid = path_resolver_->resolvePathToUUID(path, tenant);
+
+    if (file_uuid.empty()) {
+        // If path not found in cache, return 404
+        response.setStatus(Poco::Net::HTTPResponse::HTTP_NOT_FOUND);
+        response.setReason("Not Found");
+        response.setContentType("text/plain");
         std::ostream& ostr = response.send();
-        ostr << "<html><body><h1>WebDAV Server</h1><p>Welcome to the WebDAV server.</p></body></html>";
+        ostr << "File not found: " << path;
         return;
     }
 
-    // For other paths, we would need to implement path-to-UUID mapping
-    // Since we removed the database dependency, we'll implement a minimal approach
-    // to demonstrate the functionality
-    
-    // In a real implementation, we would need to map the path to a UUID and then
-    // retrieve the file content via gRPC
+    // Create gRPC request to get file
+    fileengine_rpc::GetFileRequest get_req;
+    get_req.set_uid(file_uuid);
+    get_req.set_version_timestamp(""); // Get latest version
+    *get_req.mutable_auth() = auth_ctx;
+
+    // Call gRPC service to get file content
+    fileengine_rpc::GetFileResponse get_resp;
+    try {
+        get_resp = grpc_client_->getFile(get_req);
+    } catch (const std::exception& e) {
+        webdav::errorLog("Exception during gRPC GetFile call: " + std::string(e.what()));
+        response.setStatus(Poco::Net::HTTPResponse::HTTP_SERVICE_UNAVAILABLE);
+        response.setReason("Service Unavailable");
+        response.setContentType("text/plain");
+        std::ostream& ostr = response.send();
+        ostr << "gRPC service unavailable";
+        return;
+    }
+
+    if (!get_resp.success()) {
+        webdav::errorLog("Failed to get file: " + get_resp.error());
+        response.setStatus(Poco::Net::HTTPResponse::HTTP_INTERNAL_SERVER_ERROR);
+        response.setReason("Internal Server Error");
+        response.setContentType("text/plain");
+        std::ostream& ostr = response.send();
+        ostr << "Failed to retrieve file: " << get_resp.error();
+        return;
+    }
+
+    // Return the file content
     response.setStatus(Poco::Net::HTTPResponse::HTTP_OK);
     response.setReason("OK");
-    response.setContentType("text/plain");
+    response.setContentType("application/octet-stream"); // Default content type
+    response.setContentLength(get_resp.data().size());
     std::ostream& ostr = response.send();
-    ostr << "GET request for path: " << path << " (tenant: " << tenant << ")";
+    ostr.write(get_resp.data().c_str(), get_resp.data().size());
 }
 
 void WebDAVRequestHandler::handlePut(Poco::Net::HTTPServerRequest& request, Poco::Net::HTTPServerResponse& response) {
@@ -149,18 +187,91 @@ void WebDAVRequestHandler::handlePut(Poco::Net::HTTPServerRequest& request, Poco
         return;
     }
 
+    // Create authentication context for gRPC
+    fileengine_rpc::AuthenticationContext auth_ctx;
+    auth_ctx.set_user(user);
+    auth_ctx.set_tenant(tenant);
+    for (const auto& role : roles) {
+        auth_ctx.add_roles(role);
+    }
+
     // Get request body
     std::istream& istr = request.stream();
     std::string content;
     Poco::StreamCopier::copyToString(istr, content);
 
-    // In a real implementation, we would need to implement path-to-UUID mapping
-    // For now, we'll simulate the functionality by creating a dummy file
+    // Check if the parent directory exists by resolving the parent path
+    std::string parent_path = path.substr(0, path.find_last_of('/'));
+    if (parent_path.empty()) parent_path = "/"; // Root directory
+
+    std::string parent_uuid = path_resolver_->resolvePathToUUID(parent_path, tenant);
+    if (parent_uuid.empty() && parent_path == "/") {
+        parent_uuid = ""; // Root directory UUID might be empty
+    }
+
+    if (parent_uuid.empty()) {
+        response.setStatus(Poco::Net::HTTPResponse::HTTP_CONFLICT); // 409 Conflict - parent doesn't exist
+        response.setReason("Conflict");
+        response.setContentType("text/plain");
+        std::ostream& ostr = response.send();
+        ostr << "Parent directory does not exist: " << parent_path;
+        return;
+    }
+
+    // Extract filename from path
+    std::string filename = path.substr(path.find_last_of('/') + 1);
+
+    // Create gRPC request to put file
+    fileengine_rpc::PutFileRequest put_req;
+    put_req.set_data(content);
+    put_req.set_uid(""); // Will be assigned by the server
+    *put_req.mutable_auth() = auth_ctx;
+
+    // For now, we'll call touch to create the file first if it doesn't exist
+    // Then update its content
+    std::string file_uuid = path_resolver_->resolvePathToUUID(path, tenant);
+    if (file_uuid.empty()) {
+        // File doesn't exist, create it first
+        fileengine_rpc::TouchRequest touch_req;
+        touch_req.set_parent_uid(parent_uuid);
+        touch_req.set_name(filename);
+        *touch_req.mutable_auth() = auth_ctx;
+
+        fileengine_rpc::TouchResponse touch_resp = grpc_client_->touch(touch_req);
+        if (!touch_resp.success()) {
+            webdav::errorLog("Failed to create file: " + touch_resp.error());
+            response.setStatus(Poco::Net::HTTPResponse::HTTP_INTERNAL_SERVER_ERROR);
+            response.setReason("Internal Server Error");
+            response.setContentType("text/plain");
+            std::ostream& ostr = response.send();
+            ostr << "Failed to create file: " << touch_resp.error();
+            return;
+        }
+        file_uuid = touch_resp.uid();
+    }
+
+    // Update the file content
+    put_req.set_uid(file_uuid);
+    fileengine_rpc::PutFileResponse put_resp = grpc_client_->putFile(put_req);
+
+    if (!put_resp.success()) {
+        webdav::errorLog("Failed to put file: " + put_resp.error());
+        response.setStatus(Poco::Net::HTTPResponse::HTTP_INTERNAL_SERVER_ERROR);
+        response.setReason("Internal Server Error");
+        response.setContentType("text/plain");
+        std::ostream& ostr = response.send();
+        ostr << "Failed to store file: " << put_resp.error();
+        return;
+    }
+
+    // Create path mapping for the new file
+    path_resolver_->createPathMapping(path, file_uuid, tenant);
+
     response.setStatus(Poco::Net::HTTPResponse::HTTP_CREATED);
     response.setReason("Created");
     response.setContentType("text/plain");
     std::ostream& ostr = response.send();
-    ostr << "PUT request for path: " << path << " (tenant: " << tenant << ") - Content length: " << content.length();
+    ostr << "Successfully stored file: " << path << " (size: " << content.length() << " bytes)";
 }
 
 void WebDAVRequestHandler::handleMkcol(Poco::Net::HTTPServerRequest& request, Poco::Net::HTTPServerResponse& response) {
@@ -186,13 +297,62 @@ void WebDAVRequestHandler::handleMkcol(Poco::Net::HTTPServerRequest& request, Po
         return;
     }
 
-    // In a real implementation, we would create a directory via gRPC
-    // For now, we'll simulate the functionality
+    // Create authentication context for gRPC
+    fileengine_rpc::AuthenticationContext auth_ctx;
+    auth_ctx.set_user(user);
+    auth_ctx.set_tenant(tenant);
+    for (const auto& role : roles) {
+        auth_ctx.add_roles(role);
+    }
+
+    // Check if the parent directory exists by resolving the parent path
+    std::string parent_path = path.substr(0, path.find_last_of('/'));
+    if (parent_path.empty()) parent_path = "/"; // Root directory
+
+    std::string parent_uuid = path_resolver_->resolvePathToUUID(parent_path, tenant);
+    if (parent_uuid.empty() && parent_path == "/") {
+        parent_uuid = ""; // Root directory UUID might be empty
+    }
+
+    if (parent_uuid.empty()) {
+        response.setStatus(Poco::Net::HTTPResponse::HTTP_CONFLICT); // 409 Conflict - parent doesn't exist
+        response.setReason("Conflict");
+        response.setContentType("text/plain");
+        std::ostream& ostr = response.send();
+        ostr << "Parent directory does not exist: " << parent_path;
+        return;
+    }
+
+    // Extract directory name from path
+    std::string dirname = path.substr(path.find_last_of('/') + 1);
+
+    // Create gRPC request to make directory
+    fileengine_rpc::MakeDirectoryRequest mkcol_req;
+    mkcol_req.set_parent_uid(parent_uuid);
+    mkcol_req.set_name(dirname);
+    *mkcol_req.mutable_auth() = auth_ctx;
+
+    // Call gRPC service to create directory
+    fileengine_rpc::MakeDirectoryResponse mkcol_resp = grpc_client_->makeDirectory(mkcol_req);
+
+    if (!mkcol_resp.success()) {
+        webdav::errorLog("Failed to create directory: " + mkcol_resp.error());
+        response.setStatus(Poco::Net::HTTPResponse::HTTP_INTERNAL_SERVER_ERROR);
+        response.setReason("Internal Server Error");
+        response.setContentType("text/plain");
+        std::ostream& ostr = response.send();
+        ostr << "Failed to create directory: " << mkcol_resp.error();
+        return;
+    }
+
+    // Create path mapping for the new directory
+    path_resolver_->createPathMapping(path, mkcol_resp.uid(), tenant);
+
     response.setStatus(Poco::Net::HTTPResponse::HTTP_CREATED);
     response.setReason("Created");
     response.setContentType("text/plain");
     std::ostream& ostr = response.send();
-    ostr << "MKCOL request for path: " << path << " (tenant: " << tenant << ")";
+    ostr << "Successfully created directory: " << path;
 }
 
 void WebDAVRequestHandler::handleDelete(Poco::Net::HTTPServerRequest& request, Poco::Net::HTTPServerResponse& response) {
@@ -218,29 +378,109 @@ void WebDAVRequestHandler::handleDelete(Poco::Net::HTTPServerRequest& request, P
         return;
     }
 
-    // In a real implementation, we would delete the resource via gRPC
-    // For now, we'll simulate the functionality
+    // Create authentication context for gRPC
+    fileengine_rpc::AuthenticationContext auth_ctx;
+    auth_ctx.set_user(user);
+    auth_ctx.set_tenant(tenant);
+    for (const auto& role : roles) {
+        auth_ctx.add_roles(role);
+    }
+
+    // Resolve path to UUID using path resolver
+    std::string resource_uuid = path_resolver_->resolvePathToUUID(path, tenant);
+
+    if (resource_uuid.empty()) {
+        // If path not found in cache, return 404
+        response.setStatus(Poco::Net::HTTPResponse::HTTP_NOT_FOUND);
+        response.setReason("Not Found");
+        response.setContentType("text/plain");
+        std::ostream& ostr = response.send();
+        ostr << "Resource not found: " << path;
+        return;
+    }
+
+    // Determine if it's a file or directory by getting its info
+    fileengine_rpc::StatRequest stat_req;
+    stat_req.set_uid(resource_uuid);
+    *stat_req.mutable_auth() = auth_ctx;
+
+    fileengine_rpc::StatResponse stat_resp = grpc_client_->stat(stat_req);
+
+    if (!stat_resp.success()) {
+        webdav::errorLog("Failed to get resource info: " + stat_resp.error());
+        response.setStatus(Poco::Net::HTTPResponse::HTTP_INTERNAL_SERVER_ERROR);
+        response.setReason("Internal Server Error");
+        response.setContentType("text/plain");
+        std::ostream& ostr = response.send();
+        ostr << "Failed to get resource info: " << stat_resp.error();
+        return;
+    }
+
+    // Create gRPC request to delete resource based on its type
+    if (stat_resp.info().type() == fileengine_rpc::FileType::DIRECTORY) {
+        // It's a directory, use RemoveDirectory
+        fileengine_rpc::RemoveDirectoryRequest rm_req;
+        rm_req.set_uid(resource_uuid);
+        *rm_req.mutable_auth() = auth_ctx;
+
+        fileengine_rpc::RemoveDirectoryResponse rm_resp = grpc_client_->removeDirectory(rm_req);
+
+        if (!rm_resp.success()) {
+            webdav::errorLog("Failed to delete directory: " + rm_resp.error());
+            response.setStatus(Poco::Net::HTTPResponse::HTTP_INTERNAL_SERVER_ERROR);
+            response.setReason("Internal Server Error");
+            response.setContentType("text/plain");
+            std::ostream& ostr = response.send();
+            ostr << "Failed to delete directory: " << rm_resp.error();
+            return;
+        }
+    } else {
+        // It's a file, use RemoveFile
+        fileengine_rpc::RemoveFileRequest rm_req;
+        rm_req.set_uid(resource_uuid);
+        *rm_req.mutable_auth() = auth_ctx;
+
+        fileengine_rpc::RemoveFileResponse rm_resp = grpc_client_->removeFile(rm_req);
+
+        if (!rm_resp.success()) {
+            webdav::errorLog("Failed to delete file: " + rm_resp.error());
+            response.setStatus(Poco::Net::HTTPResponse::HTTP_INTERNAL_SERVER_ERROR);
+            response.setReason("Internal Server Error");
+            response.setContentType("text/plain");
+            std::ostream& ostr = response.send();
+            ostr << "Failed to delete file: " << rm_resp.error();
+            return;
+        }
+    }
+
+    // Remove path mapping from cache
+    path_resolver_->removePathMapping(path, tenant);
+
     response.setStatus(Poco::Net::HTTPResponse::HTTP_NO_CONTENT);
     response.setReason("No Content");
     response.setContentType("text/plain");
     std::ostream& ostr = response.send();
-    ostr << "DELETE request for path: " << path << " (tenant: " << tenant << ")";
+    ostr << "Successfully deleted: " << path;
 }
 
 void WebDAVRequestHandler::handlePropfind(Poco::Net::HTTPServerRequest& request, Poco::Net::HTTPServerResponse& response) {
     std::string uri = request.getURI();
     Poco::URI poco_uri(uri);
     std::string path = poco_uri.getPath();
+    webdav::debugLog("handlePropfind: Processing PROPFIND request for path: " + path);
 
     // Extract tenant from host
     std::string host = request.getHost();
     std::string tenant = extractTenantFromHost(host);
     if (tenant.empty()) tenant = "default";
+    webdav::debugLog("handlePropfind: Resolved tenant: " + tenant);
 
     // Authenticate user
     std::string user;
     std::vector<std::string> roles;
+    webdav::debugLog("handlePropfind: Starting authentication process");
     if (!authenticateUser(request, user, tenant, roles)) {
+        webdav::debugLog("handlePropfind: Authentication failed");
         response.setStatus(Poco::Net::HTTPResponse::HTTP_UNAUTHORIZED);
         response.setReason("Unauthorized");
         response.set("WWW-Authenticate", "Basic realm=\"WebDAV Server\"");
@@ -250,9 +490,61 @@ void WebDAVRequestHandler::handlePropfind(Poco::Net::HTTPServerRequest& request,
         ostr << "<D:error xmlns:D=\"DAV:\"/>";
         return;
     }
+    webdav::debugLog("handlePropfind: Authentication successful for user: " + user + " with " + std::to_string(roles.size()) + " roles");
 
-    // For root path, return a basic directory listing
-    if (path == "/" || path.empty()) {
+    // Create authentication context for gRPC
+    fileengine_rpc::AuthenticationContext auth_ctx;
+    auth_ctx.set_user(user);
+    auth_ctx.set_tenant(tenant);
+    webdav::debugLog("handlePropfind: Building authentication context with user: " + user + ", tenant: " + tenant);
+
+    for (const auto& role : roles) {
+        auth_ctx.add_roles(role);
+        webdav::debugLog("handlePropfind: Added role to auth context: " + role);
+    }
+    webdav::debugLog("handlePropfind: Auth context built with " + std::to_string(auth_ctx.roles_size()) + " roles");
+
+    // Resolve path to UUID using path resolver
+    webdav::debugLog("handlePropfind: Resolving path to UUID: " + path);
+    std::string dir_uuid = path_resolver_->resolvePathToUUID(path, tenant);
+    webdav::debugLog("handlePropfind: Path resolution result - UUID: " + dir_uuid);
+
+    // If path doesn't exist in cache, try to resolve it from the root or create a default root
+    if (dir_uuid.empty() && path == "/") {
+        // For root path, we might need to use a special root UUID or create one
+        // For now, let's try to list the root directory with an empty UUID (which might represent the root)
+        dir_uuid = ""; // Empty UUID might represent root in the FileEngine
+        webdav::debugLog("handlePropfind: Using empty UUID for root directory");
+    }
+
+    // Create gRPC request to list directory
+    fileengine_rpc::ListDirectoryRequest list_req;
+    list_req.set_uid(dir_uuid);
+    *list_req.mutable_auth() = auth_ctx;
+    webdav::debugLog("handlePropfind: Created gRPC ListDirectory request with UUID: " + dir_uuid +
+                     ", auth user: " + auth_ctx.user() + ", auth tenant: " + auth_ctx.tenant() +
+                     ", auth roles count: " + std::to_string(auth_ctx.roles_size()));
+
+    // Call gRPC service to list directory contents
+    webdav::debugLog("handlePropfind: Making gRPC ListDirectory call");
+    fileengine_rpc::ListDirectoryResponse list_resp;
+    try {
+        list_resp = grpc_client_->listDirectory(list_req);
+        webdav::debugLog("handlePropfind: gRPC ListDirectory call completed successfully");
+    } catch (const std::exception& e) {
+        webdav::errorLog("Exception during gRPC ListDirectory call: " + std::string(e.what()));
+        response.setStatus(Poco::Net::HTTPResponse::HTTP_SERVICE_UNAVAILABLE);
+        response.setReason("Service Unavailable");
+        response.setContentType("application/xml");
+        std::ostream& ostr = response.send();
+        ostr << "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n";
+        ostr << "<D:error xmlns:D=\"DAV:\">gRPC service unavailable</D:error>";
+        return;
+    }
+
+    if (!list_resp.success()) {
+        webdav::errorLog("handlePropfind: gRPC ListDirectory failed: " + list_resp.error());
+        // If gRPC call failed, return an empty directory listing instead of error to allow cadaver to work
         response.setStatus(Poco::Net::HTTPResponse::HTTP_OK);
         response.setReason("OK");
         response.setContentType("application/xml; charset=utf-8");
@@ -261,10 +553,10 @@ void WebDAVRequestHandler::handlePropfind(Poco::Net::HTTPServerRequest& request,
         ostr << "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n";
         ostr << "<D:multistatus xmlns:D=\"DAV:\">\n";
         ostr << "  <D:response>\n";
-        ostr << "    <D:href>/</D:href>\n";
+        ostr << "    <D:href>" << path << "</D:href>\n";
         ostr << "    <D:propstat>\n";
         ostr << "      <D:prop>\n";
-        ostr << "        <D:displayname>Root Directory</D:displayname>\n";
+        ostr << "        <D:displayname>" << (path.empty() || path == "/" ? "Root Directory" : path.substr(path.find_last_of('/') + 1)) << "</D:displayname>\n";
         ostr << "        <D:resourcetype><D:collection/></D:resourcetype>\n";
         ostr << "        <D:getcontenttype>httpd/unix-directory</D:getcontenttype>\n";
         ostr << "        <D:creationdate>2026-01-10T00:00:00Z</D:creationdate>\n";
@@ -277,7 +569,9 @@ void WebDAVRequestHandler::handlePropfind(Poco::Net::HTTPServerRequest& request,
         return;
     }
 
-    // For other paths, return a simple response
+    webdav::debugLog("handlePropfind: gRPC ListDirectory succeeded, got " + std::to_string(list_resp.entries_size()) + " entries");
+
+    // Build XML response with actual directory contents from gRPC
     response.setStatus(Poco::Net::HTTPResponse::HTTP_OK);
     response.setReason("OK");
     response.setContentType("application/xml; charset=utf-8");
@@ -285,21 +579,61 @@ void WebDAVRequestHandler::handlePropfind(Poco::Net::HTTPServerRequest& request,
 
     ostr << "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n";
     ostr << "<D:multistatus xmlns:D=\"DAV:\">\n";
+
+    // Add the requested directory itself
     ostr << "  <D:response>\n";
     ostr << "    <D:href>" << path << "</D:href>\n";
     ostr << "    <D:propstat>\n";
     ostr << "      <D:prop>\n";
-    ostr << "        <D:displayname>" << path.substr(path.find_last_of('/') + 1) << "</D:displayname>\n";
-    ostr << "        <D:resourcetype></D:resourcetype>\n";
-    ostr << "        <D:getcontenttype>application/octet-stream</D:getcontenttype>\n";
+    ostr << "        <D:displayname>" << (path.empty() || path == "/" ? "Root Directory" : path.substr(path.find_last_of('/') + 1)) << "</D:displayname>\n";
+    ostr << "        <D:resourcetype><D:collection/></D:resourcetype>\n";
+    ostr << "        <D:getcontenttype>httpd/unix-directory</D:getcontenttype>\n";
     ostr << "        <D:creationdate>2026-01-10T00:00:00Z</D:creationdate>\n";
     ostr << "        <D:getlastmodified>2026-01-10T00:00:00Z</D:getlastmodified>\n";
-    ostr << "        <D:getcontentlength>0</D:getcontentlength>\n";
     ostr << "      </D:prop>\n";
     ostr << "      <D:status>HTTP/1.1 200 OK</D:status>\n";
     ostr << "    </D:propstat>\n";
     ostr << "  </D:response>\n";
+
+    // Add directory entries from gRPC response
+    for (const auto& entry : list_resp.entries()) {
+        std::string entry_path = path.empty() || path == "/" ? "/" + entry.name() : path + "/" + entry.name();
+
+        ostr << "  <D:response>\n";
+        ostr << "    <D:href>" << entry_path << "</D:href>\n";
+        ostr << "    <D:propstat>\n";
+        ostr << "      <D:prop>\n";
+        ostr << "        <D:displayname>" << entry.name() << "</D:displayname>\n";
+
+        // Set resource type based on entry type
+        if (entry.type() == fileengine_rpc::FileType::DIRECTORY) {
+            ostr << "        <D:resourcetype><D:collection/></D:resourcetype>\n";
+        } else {
+            ostr << "        <D:resourcetype></D:resourcetype>\n";
+        }
+
+        // Set content type based on entry type
+        if (entry.type() == fileengine_rpc::FileType::DIRECTORY) {
+            ostr << "        <D:getcontenttype>httpd/unix-directory</D:getcontenttype>\n";
+        } else {
+            ostr << "        <D:getcontenttype>application/octet-stream</D:getcontenttype>\n";
+        }
+
+        ostr << "        <D:creationdate>" << std::to_string(entry.created_at()) << "Z</D:creationdate>\n";
+        ostr << "        <D:getlastmodified>" << std::to_string(entry.modified_at()) << "Z</D:getlastmodified>\n";
+        ostr << "        <D:getcontentlength>" << std::to_string(entry.size()) << "</D:getcontentlength>\n";
+        ostr << "      </D:prop>\n";
+        ostr << "      <D:status>HTTP/1.1 200 OK</D:status>\n";
+        ostr << "    </D:propstat>\n";
+        ostr << "  </D:response>\n";
+
+        // Create path mapping for future reference
+        path_resolver_->createPathMapping(entry_path, entry.uid(), tenant);
+        webdav::debugLog("handlePropfind: Created path mapping - path: " + entry_path + ", UUID: " + entry.uid());
+    }
+
     ostr << "</D:multistatus>\n";
+    webdav::debugLog("handlePropfind: Completed PROPFIND request for path: " + path);
 }
 
 void WebDAVRequestHandler::handleProppatch(Poco::Net::HTTPServerRequest& request, Poco::Net::HTTPServerResponse& response) {
@@ -474,15 +808,23 @@ void WebDAVRequestHandler::handleUnlock(Poco::Net::HTTPServerRequest& request, P
 
 void WebDAVRequestHandler::handleOptions(Poco::Net::HTTPServerRequest& request, Poco::Net::HTTPServerResponse& response) {
     // WebDAV requires the OPTIONS method to return specific headers
+    // OPTIONS should not require authentication as it's used for discovery
     response.setStatus(Poco::Net::HTTPResponse::HTTP_OK);
     response.setReason("OK");
-    
+
     // Set WebDAV-specific headers
     response.set("Allow", "GET, HEAD, POST, PUT, DELETE, OPTIONS, MKCOL, PROPFIND, PROPPATCH, COPY, MOVE, LOCK, UNLOCK");
     response.set("DAV", "1, 2");
     response.set("MS-Author-Via", "DAV");
-    
-    // Set content type and send empty response body
+    response.set("Accept-Ranges", "bytes");
+    response.set("Content-Length", "0");
+
+    // Set CORS headers to allow cross-origin requests
+    response.set("Access-Control-Allow-Origin", "*");
+    response.set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS, MKCOL, PROPFIND, PROPPATCH, COPY, MOVE, LOCK, UNLOCK");
+    response.set("Access-Control-Allow-Headers", "Authorization, Content-Type, Depth, Overwrite");
+
+    // Send empty response body
     response.setContentType("text/plain");
     response.setContentLength(0);
     response.send();
@@ -495,42 +837,51 @@ std::string WebDAVRequestHandler::extractTenantFromHost(const std::string& host)
 bool WebDAVRequestHandler::authenticateUser(Poco::Net::HTTPServerRequest& request, std::string& user, std::string& tenant, std::vector<std::string>& roles) {
     // Check for Authorization header
     std::string auth_header = request.get("Authorization", "");
-    webdav::debugLog("Processing authentication request with auth header length: " + std::to_string(auth_header.length()));
-    
+    webdav::debugLog("authenticateUser: Processing authentication request with auth header length: " + std::to_string(auth_header.length()));
+
     if (auth_header.empty()) {
-        webdav::debugLog("No Authorization header found in request");
+        webdav::debugLog("authenticateUser: No Authorization header found in request");
         return false;
     }
-    
+
     // Handle Basic Authentication
     if (auth_header.substr(0, 5) == "Basic") {
-        webdav::debugLog("Processing Basic authentication for user");
+        webdav::debugLog("authenticateUser: Processing Basic authentication for user");
         std::string encoded_credentials = trim(auth_header.substr(6));
-        
+        webdav::debugLog("authenticateUser: Encoded credentials: " + encoded_credentials);
+
         // Decode Base64 credentials
         std::istringstream istr(encoded_credentials);
         std::ostringstream ostr;
         Poco::Base64Decoder b64in(istr);
         Poco::StreamCopier::copyStream(b64in, ostr);
         std::string credentials = ostr.str();
+        webdav::debugLog("authenticateUser: Decoded credentials: " + credentials);
+
         size_t colon_pos = credentials.find(':');
         if (colon_pos == std::string::npos) {
-            webdav::debugLog("Invalid credentials format - no colon found");
+            webdav::debugLog("authenticateUser: Invalid credentials format - no colon found");
             return false;
         }
-        
+
         std::string username = credentials.substr(0, colon_pos);
         std::string password = credentials.substr(colon_pos + 1);
-        
-        webdav::debugLog("Attempting to authenticate user: " + username);
-        
+        webdav::debugLog("authenticateUser: Extracted username: " + username + ", password length: " + std::to_string(password.length()));
+
+        webdav::debugLog("authenticateUser: Attempting to authenticate user: " + username);
+
         // Authenticate with LDAP
+        webdav::debugLog("authenticateUser: Calling LDAP authenticator for user: " + username);
         UserInfo user_info = ldap_auth_->authenticateUser(username, password);
+        webdav::debugLog("authenticateUser: LDAP authentication returned - authenticated: " + std::to_string(user_info.authenticated) +
+                         ", user_id: " + user_info.user_id + ", tenant: " + user_info.tenant +
+                         ", roles count: " + std::to_string(user_info.roles.size()));
+
         if (!user_info.authenticated) {
-            webdav::debugLog("LDAP authentication failed for user: " + username);
+            webdav::debugLog("authenticateUser: LDAP authentication failed for user: " + username);
             return false;
         }
-        
+
         // Log the roles loaded from LDAP
         std::string roles_str = [&user_info]() {
             std::string roles_list;
@@ -541,19 +892,21 @@ bool WebDAVRequestHandler::authenticateUser(Poco::Net::HTTPServerRequest& reques
             return roles_list.empty() ? "none" : roles_list;
         }();
 
-        webdav::debugLog("LDAP authentication successful for user: " + username +
+        webdav::debugLog("authenticateUser: LDAP authentication successful for user: " + username +
                          " (tenant: " + user_info.tenant + ")" +
                          " with roles: [" + roles_str + "]");
-        
+
         user = user_info.user_id;
         tenant = user_info.tenant.empty() ? tenant : user_info.tenant; // Use extracted tenant if available
         roles = user_info.roles;
-        
+
+        webdav::debugLog("authenticateUser: Setting user: " + user + ", tenant: " + tenant + ", roles count: " + std::to_string(roles.size()));
+
         return true;
     }
-    
-    webdav::debugLog("Unsupported authentication scheme: " + auth_header.substr(0, auth_header.find(' ')));
-    
+
+    webdav::debugLog("authenticateUser: Unsupported authentication scheme: " + auth_header.substr(0, auth_header.find(' ')));
+
     // For now, only Basic authentication is supported
     // Digest authentication would be implemented here if needed
     return false;
@@ -574,7 +927,13 @@ WebDAVServer::WebDAVServer(const std::string& host, int port)
       socket_(std::make_unique<Poco::Net::ServerSocket>(port)),
       server_params_(new Poco::Net::HTTPServerParams),
       server_(nullptr) {
+    webdav::debugLog("WebDAVServer: Initializing server on " + host + ":" + std::to_string(port));
+    webdav::debugLog("WebDAVServer: gRPC client created");
+    webdav::debugLog("WebDAVServer: Path resolver created");
+    webdav::debugLog("WebDAVServer: LDAP authenticator created");
+    webdav::debugLog("WebDAVServer: Server socket created on port " + std::to_string(port));
     server_params_->setKeepAlive(true);
+    webdav::debugLog("WebDAVServer: Initialization completed");
 }
 
 WebDAVServer::~WebDAVServer() {
@@ -584,11 +943,24 @@ WebDAVServer::~WebDAVServer() {
 }
 
 void WebDAVServer::start() {
-    auto* factory = new WebDAVRequestHandlerFactory(grpc_client_, path_resolver_, ldap_auth_);
-    server_ = std::make_unique<Poco::Net::HTTPServer>(factory, *socket_, server_params_);
-    server_->start();
+    webdav::debugLog("WebDAVServer: Starting server on " + host_ + ":" + std::to_string(port_));
+    try {
+        auto* factory = new WebDAVRequestHandlerFactory(grpc_client_, path_resolver_, ldap_auth_);
+        webdav::debugLog("WebDAVServer: Created request handler factory");
+        server_ = std::make_unique<Poco::Net::HTTPServer>(factory, *socket_, server_params_);
+        webdav::debugLog("WebDAVServer: Created HTTP server instance with socket on port " + std::to_string(port_));
+        webdav::debugLog("WebDAVServer: About to call server_->start()");
+        server_->start();
+        webdav::debugLog("WebDAVServer: Started HTTP server successfully");
 
-    std::cout << "WebDAV server listening on " << host_ << ":" << port_ << std::endl;
+        std::cout << "WebDAV server listening on " << host_ << ":" << port_ << std::endl;
+    } catch (const std::exception& e) {
+        webdav::errorLog("WebDAVServer: Exception in start(): " + std::string(e.what()));
+        throw; // Re-throw to be caught by main application
+    } catch (...) {
+        webdav::errorLog("WebDAVServer: Unknown exception in start()");
+        throw; // Re-throw to be caught by main application
+    }
 }
 
 void WebDAVServer::stop() {

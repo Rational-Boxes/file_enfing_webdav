@@ -2,3 +2,17 @@
 build/
 build*/
 .tmp
+.log
+/enhanced_test.log
+/final_test.log
+/fixed_test.log
+/src/grpc_client_wrapper.cpp.backup
+/server.log
+/server_detailed.log
+/updated_server.log
+/server_debug.log
+/server_with_request.log
+/webdav_access_test.log
+/webdav_test.log
+/enhanced_debug.log
+/diagnostic_test.log

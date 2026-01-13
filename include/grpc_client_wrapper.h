@@ -67,6 +67,9 @@ public:
     fileengine_rpc::PurgeOldVersionsResponse purgeOldVersions(const fileengine_rpc::PurgeOldVersionsRequest& request);
     fileengine_rpc::TriggerSyncResponse triggerSync(const fileengine_rpc::TriggerSyncRequest& request);
 
+    // ACL management
+    bool ensureDefaultACLs(const fileengine_rpc::AuthenticationContext& auth_ctx);
+
 private:
     std::unique_ptr<fileengine_rpc::FileService::Stub> stub_;
     grpc::ChannelArguments channel_args_;

@@ -936,6 +936,29 @@ WebDAVServer::WebDAVServer(const std::string& host, int port)
     webdav::debugLog("WebDAVServer: Initialization completed");
 }
 
+// Helper function to check if a user has a specific permission on a resource
+bool WebDAVRequestHandler::checkPermission(const std::string& resource_uuid, const fileengine_rpc::Permission& permission,
+                                          const fileengine_rpc::AuthenticationContext& auth_ctx) {
+    webdav::debugLog("checkPermission: Checking permission " + std::to_string(permission) +
+                     " for resource " + resource_uuid + " for user " + auth_ctx.user());
+
+    fileengine_rpc::CheckPermissionRequest req;
+    req.set_resource_uid(resource_uuid);
+    req.set_required_permission(permission);
+    *req.mutable_auth() = auth_ctx;
+
+    fileengine_rpc::CheckPermissionResponse resp;
+    try {
+        resp = grpc_client_->checkPermission(req);
+        webdav::debugLog("checkPermission: Permission check result - success: " + std::to_string(resp.success()) +
+                         ", has_permission: " + std::to_string(resp.has_permission()));
+        return resp.success() && resp.has_permission();
+    } catch (const std::exception& e) {
+        webdav::errorLog("Exception during gRPC CheckPermission call: " + std::string(e.what()));
+        return false; // Deny access on error
+    }
+}
+
 WebDAVServer::~WebDAVServer() {
     stop();
     // Explicitly reset the server to ensure proper cleanup

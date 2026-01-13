@@ -3,8 +3,8 @@
 
 PROTO_DIR="../proto"
 PROTO_FILE="$PROTO_DIR/fileservice.proto"
-OUTPUT_DIR="proto/src"
-INCLUDE_DIR="proto/include"
+OUTPUT_DIR="./proto/src"
+INCLUDE_DIR="./proto/include"
 
 mkdir -p $OUTPUT_DIR
 mkdir -p $INCLUDE_DIR

@@ -405,6 +405,157 @@ fileengine_rpc::CheckPermissionResponse GRPCClientWrapper::checkPermission(const
     return response;
 }
 
+// Role management operations
+fileengine_rpc::CreateRoleResponse GRPCClientWrapper::createRole(const fileengine_rpc::CreateRoleRequest& request) {
+    webdav::debugLog("gRPC CreateRole called with role: " + request.role() +
+                     ", tenant: " + request.auth().tenant() +
+                     ", user: " + request.auth().user());
+
+    fileengine_rpc::CreateRoleResponse response;
+    grpc::ClientContext context;
+
+    grpc::Status status = stub_->CreateRole(&context, request, &response);
+    if (!status.ok()) {
+        webdav::errorLog("CreateRole failed: " + std::string(status.error_message()));
+        response.set_success(false);
+        response.set_error(status.error_message());
+    } else {
+        webdav::debugLog("CreateRole succeeded for role: " + request.role());
+        response.set_success(true);
+    }
+
+    return response;
+}
+
+fileengine_rpc::DeleteRoleResponse GRPCClientWrapper::deleteRole(const fileengine_rpc::DeleteRoleRequest& request) {
+    webdav::debugLog("gRPC DeleteRole called with role: " + request.role() +
+                     ", tenant: " + request.auth().tenant() +
+                     ", user: " + request.auth().user());
+
+    fileengine_rpc::DeleteRoleResponse response;
+    grpc::ClientContext context;
+
+    grpc::Status status = stub_->DeleteRole(&context, request, &response);
+    if (!status.ok()) {
+        webdav::errorLog("DeleteRole failed: " + std::string(status.error_message()));
+        response.set_success(false);
+        response.set_error(status.error_message());
+    } else {
+        webdav::debugLog("DeleteRole succeeded for role: " + request.role());
+        response.set_success(true);
+    }
+
+    return response;
+}
+
+fileengine_rpc::AssignUserToRoleResponse GRPCClientWrapper::assignUserToRole(const fileengine_rpc::AssignUserToRoleRequest& request) {
+    webdav::debugLog("gRPC AssignUserToRole called with user: " + request.user() +
+                     ", role: " + request.role() +
+                     ", tenant: " + request.auth().tenant() +
+                     ", user: " + request.auth().user());
+
+    fileengine_rpc::AssignUserToRoleResponse response;
+    grpc::ClientContext context;
+
+    grpc::Status status = stub_->AssignUserToRole(&context, request, &response);
+    if (!status.ok()) {
+        webdav::errorLog("AssignUserToRole failed: " + std::string(status.error_message()));
+        response.set_success(false);
+        response.set_error(status.error_message());
+    } else {
+        webdav::debugLog("AssignUserToRole succeeded for user: " + request.user() + " to role: " + request.role());
+        response.set_success(true);
+    }
+
+    return response;
+}
+
+fileengine_rpc::RemoveUserFromRoleResponse GRPCClientWrapper::removeUserFromRole(const fileengine_rpc::RemoveUserFromRoleRequest& request) {
+    webdav::debugLog("gRPC RemoveUserFromRole called with user: " + request.user() +
+                     ", role: " + request.role() +
+                     ", tenant: " + request.auth().tenant() +
+                     ", user: " + request.auth().user());
+
+    fileengine_rpc::RemoveUserFromRoleResponse response;
+    grpc::ClientContext context;
+
+    grpc::Status status = stub_->RemoveUserFromRole(&context, request, &response);
+    if (!status.ok()) {
+        webdav::errorLog("RemoveUserFromRole failed: " + std::string(status.error_message()));
+        response.set_success(false);
+        response.set_error(status.error_message());
+    } else {
+        webdav::debugLog("RemoveUserFromRole succeeded for user: " + request.user() + " from role: " + request.role());
+        response.set_success(true);
+    }
+
+    return response;
+}
+
+fileengine_rpc::GetRolesForUserResponse GRPCClientWrapper::getRolesForUser(const fileengine_rpc::GetRolesForUserRequest& request) {
+    webdav::debugLog("gRPC GetRolesForUser called with user: " + request.user() +
+                     ", tenant: " + request.auth().tenant() +
+                     ", user: " + request.auth().user());
+
+    fileengine_rpc::GetRolesForUserResponse response;
+    grpc::ClientContext context;
+
+    grpc::Status status = stub_->GetRolesForUser(&context, request, &response);
+    if (!status.ok()) {
+        webdav::errorLog("GetRolesForUser failed: " + std::string(status.error_message()));
+        response.set_success(false);
+        response.set_error(status.error_message());
+    } else {
+        webdav::debugLog("GetRolesForUser succeeded for user: " + request.user() +
+                         ", found " + std::to_string(response.roles_size()) + " roles");
+        response.set_success(true);
+    }
+
+    return response;
+}
+
+fileengine_rpc::GetUsersForRoleResponse GRPCClientWrapper::getUsersForRole(const fileengine_rpc::GetUsersForRoleRequest& request) {
+    webdav::debugLog("gRPC GetUsersForRole called with role: " + request.role() +
+                     ", tenant: " + request.auth().tenant() +
+                     ", user: " + request.auth().user());
+
+    fileengine_rpc::GetUsersForRoleResponse response;
+    grpc::ClientContext context;
+
+    grpc::Status status = stub_->GetUsersForRole(&context, request, &response);
+    if (!status.ok()) {
+        webdav::errorLog("GetUsersForRole failed: " + std::string(status.error_message()));
+        response.set_success(false);
+        response.set_error(status.error_message());
+    } else {
+        webdav::debugLog("GetUsersForRole succeeded for role: " + request.role() +
+                         ", found " + std::to_string(response.users_size()) + " users");
+        response.set_success(true);
+    }
+
+    return response;
+}
+
+fileengine_rpc::GetAllRolesResponse GRPCClientWrapper::getAllRoles(const fileengine_rpc::GetAllRolesRequest& request) {
+    webdav::debugLog("gRPC GetAllRoles called with tenant: " + request.auth().tenant() +
+                     ", user: " + request.auth().user());
+
+    fileengine_rpc::GetAllRolesResponse response;
+    grpc::ClientContext context;
+
+    grpc::Status status = stub_->GetAllRoles(&context, request, &response);
+    if (!status.ok()) {
+        webdav::errorLog("GetAllRoles failed: " + std::string(status.error_message()));
+        response.set_success(false);
+        response.set_error(status.error_message());
+    } else {
+        webdav::debugLog("GetAllRoles succeeded, found " + std::to_string(response.roles_size()) + " roles");
+        response.set_success(true);
+    }
+
+    return response;
+}
+
 // Administrative operations
 fileengine_rpc::StorageUsageResponse GRPCClientWrapper::getStorageUsage(const fileengine_rpc::StorageUsageRequest& request) {
     fileengine_rpc::StorageUsageResponse response;

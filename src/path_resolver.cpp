@@ -10,8 +10,8 @@ namespace webdav {
 PathResolver::PathResolver(std::shared_ptr<GRPCClientWrapper> grpc_client)
     : grpc_client_(grpc_client) {
     // Initialize with in-memory storage instead of database
-    // Initialize root path mapping
-    createPathMapping("/", "", "default"); // Empty UUID represents root
+    // Initialize root path mapping - use "default" for default tenant
+    createPathMapping("/", "", "default"); // Empty UUID represents root, "default" tenant
 }
 
 std::string PathResolver::resolvePathToUUID(const std::string& path, const std::string& tenant) {

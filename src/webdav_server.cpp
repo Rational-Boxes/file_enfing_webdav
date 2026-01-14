@@ -201,8 +201,25 @@ void WebDAVRequestHandler::handlePut(Poco::Net::HTTPServerRequest& request, Poco
     Poco::StreamCopier::copyToString(istr, content);
 
     // Check if the parent directory exists by resolving the parent path
-    std::string parent_path = path.substr(0, path.find_last_of('/'));
-    if (parent_path.empty()) parent_path = "/"; // Root directory
+    // Remove trailing slash if present (but keep root as "/")
+    std::string clean_path = path;
+    if (clean_path.length() > 1 && clean_path.back() == '/') {
+        clean_path.pop_back();
+    }
+
+    // Find parent path by getting everything up to the last slash
+    std::string parent_path;
+    size_t last_slash = clean_path.find_last_of('/');
+    if (last_slash == 0) {
+        parent_path = "/";  // Parent of "/something" is root
+    } else if (last_slash != std::string::npos) {
+        parent_path = clean_path.substr(0, last_slash);
+        if (parent_path.empty()) {
+            parent_path = "/";  // Handle edge case
+        }
+    } else {
+        parent_path = "/";  // Default to root if no slash found
+    }
 
     std::string parent_uuid = path_resolver_->resolvePathToUUID(parent_path, tenant);
     if (parent_uuid.empty() && parent_path == "/") {
@@ -219,7 +236,7 @@ void WebDAVRequestHandler::handlePut(Poco::Net::HTTPServerRequest& request, Poco
     }
 
     // Extract filename from path
-    std::string filename = path.substr(path.find_last_of('/') + 1);
+    std::string filename = clean_path.substr(clean_path.find_last_of('/') + 1);
 
     // Create gRPC request to put file
     fileengine_rpc::PutFileRequest put_req;
@@ -306,8 +323,25 @@ void WebDAVRequestHandler::handleMkcol(Poco::Net::HTTPServerRequest& request, Po
     }
 
     // Check if the parent directory exists by resolving the parent path
-    std::string parent_path = path.substr(0, path.find_last_of('/'));
-    if (parent_path.empty()) parent_path = "/"; // Root directory
+    // Remove trailing slash if present (but keep root as "/")
+    std::string clean_path = path;
+    if (clean_path.length() > 1 && clean_path.back() == '/') {
+        clean_path.pop_back();
+    }
+
+    // Find parent path by getting everything up to the last slash
+    std::string parent_path;
+    size_t last_slash = clean_path.find_last_of('/');
+    if (last_slash == 0) {
+        parent_path = "/";  // Parent of "/something" is root
+    } else if (last_slash != std::string::npos) {
+        parent_path = clean_path.substr(0, last_slash);
+        if (parent_path.empty()) {
+            parent_path = "/";  // Handle edge case
+        }
+    } else {
+        parent_path = "/";  // Default to root if no slash found
+    }
 
     std::string parent_uuid = path_resolver_->resolvePathToUUID(parent_path, tenant);
     if (parent_uuid.empty() && parent_path == "/") {
@@ -324,7 +358,7 @@ void WebDAVRequestHandler::handleMkcol(Poco::Net::HTTPServerRequest& request, Po
     }
 
     // Extract directory name from path
-    std::string dirname = path.substr(path.find_last_of('/') + 1);
+    std::string dirname = clean_path.substr(clean_path.find_last_of('/') + 1);
 
     // Create gRPC request to make directory
     fileengine_rpc::MakeDirectoryRequest mkcol_req;
